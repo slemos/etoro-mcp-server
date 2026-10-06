@@ -1,0 +1,56 @@
+{
+  "name": "etoro-mcp-server",
+  "version": "0.1.0",
+  "description": "Unofficial MCP server for the eToro Public API: read your portfolio and market data, and (opt-in) place orders with preview, cost check and human confirmation. Demo-first and read-only by default.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/slemos/etoro-mcp-server.git"
+  },
+  "homepage": "https://github.com/slemos/etoro-mcp-server#readme",
+  "bugs": {
+    "url": "https://github.com/slemos/etoro-mcp-server/issues"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "etoro-mcp-server": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "manifest.json"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node scripts/add-shebang.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "bundle": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=server/index.js --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\"",
+    "mcpb:validate": "npx --yes @anthropic-ai/mcpb validate manifest.json",
+    "mcpb:pack": "npm run bundle && npx --yes @anthropic-ai/mcpb pack . etoro-mcp-server.mcpb",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "etoro",
+    "trading",
+    "claude",
+    "mcpb"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  }
+}

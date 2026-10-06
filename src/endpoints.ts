@@ -1,0 +1,114 @@
+/**
+ * The complete allowlist of eToro API routes this server can call.
+ * The HTTP client refuses anything that is not described here.
+ *
+ * Source: https://api-portal.etoro.com (llms.txt index and API reference pages).
+ * Routes marked `inferred` follow the documented demo/real naming pattern but
+ * were not individually confirmed in the reference pages.
+ */
+import type { EtoroEnv } from "./config.js";
+
+export type RouteKind = "read" | "write";
+export type HttpMethod = "GET" | "POST" | "DELETE";
+
+export interface RouteSpec {
+  id: string;
+  /** "read" routes never change state (including POST what-if/eligibility queries). */
+  kind: RouteKind;
+  method: HttpMethod;
+  path: string;
+}
+
+const id = (value: number | string): string => encodeURIComponent(String(value));
+
+function route(idName: string, kind: RouteKind, method: HttpMethod, path: string): RouteSpec {
+  return { id: idName, kind, method, path };
+}
+
+export const R = {
+  // ---- Read: trading info -------------------------------------------------
+  portfolioSnapshot: (env: EtoroEnv) =>
+    route(
+      "portfolioSnapshot",
+      "read",
+      "GET",
+      env === "demo" ? "/api/v1/trading/info/demo/aggregate-portfolio" : "/api/v1/trading/info/aggregate-portfolio",
+    ),
+  portfolioBreakdown: (env: EtoroEnv) =>
+    route(
+      "portfolioBreakdown",
+      "read",
+      "GET",
+      env === "demo" ? "/api/v1/trading/info/demo/portfolio" /* inferred */ : "/api/v1/trading/info/portfolio",
+    ),
+  pnl: (env: EtoroEnv) =>
+    route("pnl", "read", "GET", env === "demo" ? "/api/v1/trading/info/demo/pnl" /* inferred */ : "/api/v1/trading/info/real/pnl"),
+  tradeHistory: (env: EtoroEnv) =>
+    route(
+      "tradeHistory",
+      "read",
+      "GET",
+      env === "demo" ? "/api/v1/trading/info/demo/trade/history" /* inferred */ : "/api/v1/trading/info/trade/history",
+    ),
+  orderLookup: (env: EtoroEnv) =>
+    route(
+      "orderLookup",
+      "read",
+      "GET",
+      env === "demo" ? "/api/v2/trading/info/demo/orders:lookup" /* inferred */ : "/api/v2/trading/info/orders:lookup",
+    ),
+  eligibility: (env: EtoroEnv) =>
+    route(
+      "eligibility",
+      "read",
+      "POST",
+      env === "demo" ? "/api/v2/trading/info/demo/eligibility" /* inferred */ : "/api/v2/trading/info/eligibility",
+    ),
+  costs: (env: EtoroEnv) =>
+    route("costs", "read", "POST", env === "demo" ? "/api/v2/trading/info/demo/costs" : "/api/v2/trading/info/costs"),
+
+  // ---- Read: balances, market data, watchlists ----------------------------
+  balances: () => route("balances", "read", "GET", "/api/v1/balances"),
+  instruments: () => route("instruments", "read", "GET", "/api/v2/market-data/instruments"),
+  rates: () => route("rates", "read", "GET", "/api/v1/market-data/instruments/rates"),
+  watchlists: () => route("watchlists", "read", "GET", "/api/v1/watchlists"),
+
+  // ---- Write: trading -----------------------------------------------------
+  createOrder: (env: EtoroEnv) =>
+    route(
+      "createOrder",
+      "write",
+      "POST",
+      env === "demo" ? "/api/v2/trading/execution/demo/orders" : "/api/v2/trading/execution/orders",
+    ),
+  cancelOrder: (env: EtoroEnv, orderId: number) =>
+    route(
+      "cancelOrder",
+      "write",
+      "DELETE",
+      env === "demo"
+        ? `/api/v2/trading/execution/demo/orders/${id(orderId)}`
+        : `/api/v2/trading/execution/orders/${id(orderId)}`,
+    ),
+  closePosition: (env: EtoroEnv, positionId: number) =>
+    route(
+      "closePosition",
+      "write",
+      "POST",
+      env === "demo"
+        ? `/api/v1/trading/execution/demo/market-close-orders/positions/${id(positionId)}`
+        : `/api/v1/trading/execution/market-close-orders/positions/${id(positionId)}`,
+    ),
+
+  // ---- Write: watchlists (no money involved) ------------------------------
+  createWatchlist: () => route("createWatchlist", "write", "POST", "/api/v1/watchlists"),
+  addWatchlistItems: (watchlistId: string) =>
+    route("addWatchlistItems", "write", "POST", `/api/v1/watchlists/${id(watchlistId)}/items`),
+  removeWatchlistItems: (watchlistId: string) =>
+    route("removeWatchlistItems", "write", "DELETE", `/api/v1/watchlists/${id(watchlistId)}/items`),
+  deleteWatchlist: (watchlistId: string) =>
+    route("deleteWatchlist", "write", "DELETE", `/api/v1/watchlists/${id(watchlistId)}`),
+
+  // ---- Write: money movement (extra opt-in) -------------------------------
+  transfer: () => route("transfer", "write", "POST", "/api/v1/money/transfers"),
+} as const;

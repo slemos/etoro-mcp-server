@@ -1,0 +1,18 @@
+# The bundle only needs manifest.json and the esbuild output in server/.
+node_modules/
+src/
+test/
+dist/
+scripts/
+docs/
+.github/
+.git/
+.env
+.env.*
+*.mcpb
+tsconfig*.json
+vitest.config.*
+package.json
+package-lock.json
+CHANGELOG.md
+CONTRIBUTING.md

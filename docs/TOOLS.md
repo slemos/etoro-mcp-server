@@ -1,0 +1,50 @@
+# Tool reference
+
+All tools are prefixed `etoro_`. Read tools are annotated `readOnlyHint: true`; write tools `readOnlyHint: false` (with `destructiveHint` set where the action is irreversible). Names are well under 64 characters. Responses are eToro's JSON as returned (truncated with a note above ~120k characters).
+
+`env` below is the configured `ETORO_ENV` (`demo` or `real`). Reference pages live under <https://api-portal.etoro.com>.
+
+## Read tools
+
+| Tool | Method and route | Parameters |
+|---|---|---|
+| `etoro_get_portfolio` | `GET /api/v1/trading/info/aggregate-portfolio` (demo: `/info/demo/aggregate-portfolio`) | `pnlLevel` (None/Pnl/DailyPnl), `instrumentIds[]` |
+| `etoro_get_portfolio_breakdown` | `GET /api/v1/trading/info/portfolio` (demo: `/info/demo/portfolio`, inferred) | – |
+| `etoro_get_pnl` | `GET /api/v1/trading/info/real/pnl` (demo: `/info/demo/pnl`, inferred) | – |
+| `etoro_get_balances` | `GET /api/v1/balances` | `displayCurrency`, `includeZeroBalances`, `includeSubAccounts`, `accountTypes` |
+| `etoro_get_trade_history` | `GET /api/v1/trading/info/trade/history` (demo inferred) | `minDate` (YYYY-MM-DD), `page`, `pageSize` |
+| `etoro_get_order` | `GET /api/v2/trading/info/orders:lookup` (demo inferred) | exactly one of `orderId`, `referenceId` |
+| `etoro_get_instruments` | `GET /api/v2/market-data/instruments` | `symbols[]` or `instrumentIds[]`, `type`, `pageSize` |
+| `etoro_get_rates` | `GET /api/v1/market-data/instruments/rates` | `instrumentIds[]` (1–100) |
+| `etoro_check_eligibility` | `POST /api/v2/trading/info/eligibility` (computes only; demo inferred) | `instrumentIds[]` and/or `symbols[]` |
+| `etoro_get_trading_costs` | `POST /api/v2/trading/info/costs` (what-if; demo: `/info/demo/costs`) | `action`, `transaction`, `symbol`/`instrumentId`, `settlementType`, `orderType`, `leverage`, `amountUsd`, `positionIds[]` |
+| `etoro_list_watchlists` | `GET /api/v1/watchlists` | `itemsPerPage`, `includeBuiltin` |
+
+## Write tools (registered only with `ETORO_ENABLE_WRITE=true`; real needs `ETORO_ALLOW_REAL_WRITE=true`)
+
+### Two-step trading actions
+
+| Tool | What it does | Executed route (on confirm) |
+|---|---|---|
+| `etoro_prepare_open_position` | Resolves the instrument, checks eligibility and costs, enforces `ETORO_MAX_ORDER_USD`, returns a `confirmationId` | `POST /api/v2/trading/execution/orders` (demo: `/execution/demo/orders`) |
+| `etoro_prepare_close_position` | Previews closing a position (`positionId`, `instrumentId`, optional `unitsToDeduct`; omit to close all) | `POST /api/v1/trading/execution/market-close-orders/positions/{positionId}` (demo: `/execution/demo/...`) |
+| `etoro_prepare_cancel_order` | Previews cancelling a pending order (`orderId`) | `DELETE /api/v2/trading/execution/orders/{orderId}` (demo: `/execution/demo/orders/{orderId}`) |
+| `etoro_prepare_transfer` | Previews an internal account-to-account transfer. **Real only**, needs `ETORO_ALLOW_TRANSFERS=true` | `POST /api/v1/money/transfers` |
+| `etoro_confirm_action` | Executes a previewed action by `confirmationId`: single use, expires after `ETORO_CONFIRM_TTL_SECONDS`, subject to the write rate limit and session cap, and asks the user via elicitation when the client supports it | – |
+
+`etoro_prepare_open_position` parameters: `symbol` or `instrumentId`; `side` (`buy` | `sellShort`); `settlementType` (`real` | `cfd`, optional); `orderType` (`mkt` | `mit` | `limitIOC`); `amountUsd` or `units`; `leverage` (default 1); `stopLossRate`, `stopLossType` (`fixed` | `trailing`), `takeProfitRate`, `triggerRate` (mit), `limitRate` (limitIOC).
+
+Rules enforced before a preview is created (mirroring eToro's documented constraints): exactly one of symbol/instrumentId and one of amountUsd/units; `stopLossRate` required when leverage > 1, when short selling, or with a trailing stop; `triggerRate` for `mit`; `limitRate` for `limitIOC`; exposure (amount × leverage) at most `ETORO_MAX_ORDER_USD`.
+
+### Watchlists (no money involved)
+
+| Tool | Route |
+|---|---|
+| `etoro_create_watchlist` | `POST /api/v1/watchlists?name=&type=` |
+| `etoro_add_watchlist_items` | `POST /api/v1/watchlists/{id}/items` |
+| `etoro_remove_watchlist_items` | `DELETE /api/v1/watchlists/{id}/items` (asks for approval when the client supports it) |
+| `etoro_delete_watchlist` | `DELETE /api/v1/watchlists/{id}` (asks for approval when the client supports it) |
+
+## Rate limits
+
+eToro applies shared quotas (about 60 requests/60 s for most reads, 120/60 s for market data, 20/60 s for trading writes). The client retries `429` responses up to 3 attempts honoring `Retry-After`, reusing the same `x-request-id`.
