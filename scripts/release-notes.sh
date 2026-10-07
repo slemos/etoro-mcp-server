@@ -25,15 +25,15 @@ $section
 ## Install (Claude Desktop)
 
 1. Download \`etoro-mcp-server-$version.mcpb\` below.
-2. Double-click it, or drag it into **Settings → Extensions**. Claude Desktop shows an "unsigned extension" notice (see below).
-3. Paste your eToro API key and user key (a **Read** key on **Demo** is enough to start) and leave *Enable write tools* off.
+2. Double-click it, or drag it into **Settings → Extensions**. Claude Desktop shows a red warning that Anthropic has not verified the developer (see below).
+3. Paste your eToro API key and user key (a **Read** key on **Demo** is enough to start) and leave *Use the REAL environment* and *Enable write tools* off.
 4. Ask Claude: *"Check my eToro connection."*
 
 Claude Code, other clients and key handling: see the [README](https://github.com/$repo#readme).
 
 ## Verify before installing
 
-The bundle is not code-signed with a certificate, which is why Claude Desktop shows the notice. Its origin is attested instead:
+Claude Desktop warns about any extension whose developer Anthropic has not verified, and this bundle is not code-signed with a certificate either. Its origin is attested instead:
 
 \`\`\`bash
 shasum -a 256 -c SHA256SUMS --ignore-missing

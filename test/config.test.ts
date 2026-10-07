@@ -25,6 +25,18 @@ describe("loadConfig", () => {
     }
   });
 
+  it("reads the environment from ETORO_USE_REAL (the bundle's switch) and refuses contradictions", () => {
+    expect(loadConfig({ ...keys, ETORO_USE_REAL: "true" }).env).toBe("real");
+    expect(loadConfig({ ...keys, ETORO_USE_REAL: "false" }).env).toBe("demo");
+    expect(loadConfig({ ...keys, ETORO_USE_REAL: "${user_config.use_real}" }).env).toBe("demo");
+    expect(loadConfig({ ...keys, ETORO_ENV: "real", ETORO_USE_REAL: "true" }).env).toBe("real");
+    expect(loadConfig({ ...keys, ETORO_ENV: "Demo ", ETORO_USE_REAL: "false" }).env).toBe("demo");
+    expect(() => loadConfig({ ...keys, ETORO_ENV: "demo", ETORO_USE_REAL: "true" })).toThrow(/set only one/);
+    expect(() => loadConfig({ ...keys, ETORO_ENV: "real", ETORO_USE_REAL: "false" })).toThrow(ConfigError);
+    expect(() => loadConfig({ ...keys, ETORO_USE_REAL: "maybe" })).toThrow(/ETORO_USE_REAL must be/);
+    expect(() => loadConfig({ ...keys, ETORO_ENV: "prod", ETORO_USE_REAL: "true" })).toThrow(/ETORO_ENV must be/);
+  });
+
   it("treats empty values and unresolved templates as unset", () => {
     const cfg = loadConfig({ ...keys, ETORO_ENV: "${user_config.env}", ETORO_ENABLE_WRITE: "", ETORO_MAX_ORDER_USD: "${user_config.max}" });
     expect(cfg.env).toBe("demo");

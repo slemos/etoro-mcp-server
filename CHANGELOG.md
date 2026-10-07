@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.1 — 2026-10-06
+
+Polish for the Claude Desktop install, from trying the 0.2.0 bundle.
+
+### Changed
+- The bundle's settings form has a **Use the REAL environment** switch (off by default) instead of a free-text "Environment" field: extension forms cannot show a drop-down, and a typo in the text field stopped the server from starting. The server reads it from the new `ETORO_USE_REAL` variable; `ETORO_ENV` keeps working, and if both are set they must agree or the server refuses to start. Anyone who already configured 0.2.0 sets the form again.
+- Shorter descriptions for the key fields, and an icon.
+- README and release notes describe the real install warning in Claude Desktop (Anthropic has not verified the developer) instead of "unsigned extension".
+
+### Security and release
+- `security:check` also covers `ETORO_USE_REAL` (real still needs its second write switch; contradictory settings are refused). Tests: 127.
+
 ## 0.2.0 — 2026-10-06
 
 This release makes the server aware of what your account can actually do (real shares vs CFDs), verifies which eToro environment it is talking to before any trade, shortens the huge portfolio payloads, and adds automated security checks and a verifiable release pipeline. It also fixes a path-handling bug found by the new checks.

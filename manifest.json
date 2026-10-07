@@ -3,7 +3,7 @@
   "manifest_version": "0.4",
   "name": "etoro-mcp-server",
   "display_name": "eToro (unofficial)",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Unofficial MCP server for the eToro Public API: read your portfolio and market data, and opt in to placing orders with preview, cost check and human confirmation.",
   "long_description": "Connects Claude to your own eToro account through the eToro Public API.\n\n**Read-only and demo by default.** Placing, closing and cancelling orders must be switched on explicitly, every action is previewed first (eligibility, cost estimate, size caps) and then executed only after a confirmation, and real-money writes need a second opt-in. API keys are stored in your operating system's keychain and never leave your machine except in requests to eToro.\n\nThis project is not affiliated with, endorsed by or supported by eToro. It is not financial advice. Trading, especially with leverage or CFDs, can lose money.",
   "author": {
@@ -27,7 +27,7 @@
       "env": {
         "ETORO_API_KEY": "${user_config.api_key}",
         "ETORO_USER_KEY": "${user_config.user_key}",
-        "ETORO_ENV": "${user_config.environment}",
+        "ETORO_USE_REAL": "${user_config.use_real}",
         "ETORO_ENABLE_WRITE": "${user_config.enable_write}",
         "ETORO_ALLOW_REAL_WRITE": "${user_config.allow_real_write}",
         "ETORO_ALLOW_TRANSFERS": "${user_config.allow_transfers}",
@@ -41,23 +41,23 @@
     "api_key": {
       "type": "string",
       "title": "eToro API key",
-      "description": "Public API key (x-api-key). Create a key pair in eToro: Settings > Trading > API Key Management. Prefer a Read-only key unless you want to place orders.",
+      "description": "Your eToro API key (x-api-key).",
       "sensitive": true,
       "required": true
     },
     "user_key": {
       "type": "string",
       "title": "eToro user key",
-      "description": "User key (x-user-key) of the same key pair.",
+      "description": "Your eToro user key (x-user-key), from the same key pair.",
       "sensitive": true,
       "required": true
     },
-    "environment": {
-      "type": "string",
-      "title": "Environment",
-      "description": "Type demo or real. The key pair must have been created for the same environment.",
-      "default": "demo",
-      "required": true
+    "use_real": {
+      "type": "boolean",
+      "title": "Use the REAL environment",
+      "description": "Off = eToro's demo environment (virtual money). On = your real account. The key pair must have been created for the same environment.",
+      "default": false,
+      "required": false
     },
     "enable_write": {
       "type": "boolean",
@@ -107,5 +107,6 @@
   },
   "homepage": "https://github.com/slemos/etoro-mcp-server",
   "documentation": "https://github.com/slemos/etoro-mcp-server#readme",
-  "support": "https://github.com/slemos/etoro-mcp-server/issues"
+  "support": "https://github.com/slemos/etoro-mcp-server/issues",
+  "icon": "icon.png"
 }

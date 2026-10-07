@@ -201,6 +201,24 @@ function resolveSecret(name: string, env: NodeJS.ProcessEnv, io: SecretIo): stri
   return undefined;
 }
 
+/**
+ * ETORO_ENV is "demo" or "real". ETORO_USE_REAL=true|false is the same choice as a switch; the MCPB bundle uses it
+ * because its settings form has toggles but no drop-down list. Setting both is allowed only when they agree.
+ */
+function resolveEnvironment(env: NodeJS.ProcessEnv): EtoroEnv {
+  const named = clean(env.ETORO_ENV)?.toLowerCase();
+  if (named !== undefined && named !== "demo" && named !== "real") {
+    throw new ConfigError('ETORO_ENV must be "demo" or "real".');
+  }
+  const useReal = clean(env.ETORO_USE_REAL) === undefined ? undefined : parseBool("ETORO_USE_REAL", env.ETORO_USE_REAL, false);
+  if (useReal === undefined) return named ?? "demo";
+  const fromSwitch: EtoroEnv = useReal ? "real" : "demo";
+  if (named !== undefined && named !== fromSwitch) {
+    throw new ConfigError(`ETORO_ENV is "${named}" but ETORO_USE_REAL is ${useReal}: set only one of them, or make them agree.`);
+  }
+  return fromSwitch;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env, io: SecretIo = defaultSecretIo): Config {
   const apiKey = resolveSecret("ETORO_API_KEY", env, io);
   const userKey = resolveSecret("ETORO_USER_KEY", env, io);
@@ -211,10 +229,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, io: SecretIo = 
     );
   }
 
-  const envName = (clean(env.ETORO_ENV) ?? "demo").toLowerCase();
-  if (envName !== "demo" && envName !== "real") {
-    throw new ConfigError('ETORO_ENV must be "demo" or "real".');
-  }
+  const envName = resolveEnvironment(env);
 
   const etoroEnv: EtoroEnv = envName;
   return {

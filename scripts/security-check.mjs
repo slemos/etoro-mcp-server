@@ -127,6 +127,11 @@ async function main() {
   const realNoSecond = await toolNames("real-no-second-switch", { ETORO_ENV: "real", ETORO_ENABLE_WRITE: "true" });
   check("real + ETORO_ENABLE_WRITE without ETORO_ALLOW_REAL_WRITE: still read-only", WRITE_TOOLS.every((t) => !realNoSecond.some((x) => x.name === t)));
 
+  const switchReal = await toolNames("use-real-switch", { ETORO_USE_REAL: "true", ETORO_ENABLE_WRITE: "true" });
+  check("ETORO_USE_REAL=true selects real, so writes still need the second switch", WRITE_TOOLS.every((t) => !switchReal.some((x) => x.name === t)));
+  const contradiction = await runToExit({ ETORO_ENV: "demo", ETORO_USE_REAL: "true" });
+  check("ETORO_ENV and ETORO_USE_REAL that disagree are refused at startup", contradiction.code !== 0 && /set only one/.test(contradiction.stderr), `exit ${contradiction.code}: ${contradiction.stderr.slice(0, 200)}`);
+
   const realWrite = await toolNames("real-write", { ETORO_ENV: "real", ETORO_ENABLE_WRITE: "true", ETORO_ALLOW_REAL_WRITE: "true" });
   check("real writes enabled: no transfer tool without ETORO_ALLOW_TRANSFERS", !realWrite.some((t) => t.name === "etoro_prepare_transfer"));
   const demoTransfers = await toolNames("demo-transfers", { ETORO_ENABLE_WRITE: "true", ETORO_ALLOW_TRANSFERS: "true" });

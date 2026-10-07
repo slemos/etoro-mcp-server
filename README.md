@@ -35,8 +35,8 @@ You need an eToro **API key pair**; a **Read** key on the **Demo** environment i
 **Claude Desktop**
 
 1. Download `etoro-mcp-server-<version>.mcpb` from the [latest release](https://github.com/slemos/etoro-mcp-server/releases/latest) (or build it: `npm ci && npm run mcpb:pack`).
-2. Double-click it, or drag it into **Settings → Extensions**. Claude Desktop will say the extension is *unsigned*: that is expected, and you can [check where the file came from](#verifying-a-release).
-3. Paste your API key and user key, keep the environment on `demo`, and leave **Enable write tools** off. The keys go to your OS keychain.
+2. Double-click it, or drag it into **Settings → Extensions**. Claude Desktop shows a red warning that the extension gets access to your computer and that Anthropic has not verified the developer: that is expected for an independent project, and you can [check where the file came from](#verifying-a-release).
+3. Paste your API key and user key, leave **Use the REAL environment** and **Enable write tools** off. The keys go to your OS keychain.
 4. Start a chat and ask: *"Check my eToro connection."* Then try *"How is my portfolio doing?"*
 
 **Claude Code**
@@ -93,10 +93,10 @@ See [SECURITY.md](SECURITY.md) for the threat model and how to report a vulnerab
 
 1. Get `etoro-mcp-server-<version>.mcpb` from the GitHub release, or build it: `npm ci && npm run mcpb:pack`.
 2. Open it with Claude Desktop (double-click, or drag it into **Settings → Extensions**).
-3. Fill in the form: API key, user key, environment (`demo` to start). Keys are stored in your OS keychain.
+3. Fill in the form: API key, user key, and leave **Use the REAL environment** off to start on demo. Keys are stored in your OS keychain.
 4. Leave **Enable write tools** off until you have tried the read tools.
 
-Claude Desktop shows an "unsigned extension" notice because the bundle is not signed with a code-signing certificate (see [Verifying a release](#verifying-a-release) for how to check where it came from). Some organisations restrict which extensions may be installed; if yours does, ask your administrator or build from source.
+Claude Desktop shows a red warning before installing: the extension runs with your user's access to your computer, and any developer information shown "has not been verified by Anthropic". That is the case for any extension from outside Anthropic's own directory, and this bundle is also not signed with a code-signing certificate; see [Verifying a release](#verifying-a-release) for how to check where it came from. Some organisations restrict which extensions may be installed; if yours does, ask your administrator or build from source.
 
 ### Claude Code
 
@@ -219,6 +219,7 @@ All settings are environment variables (see [`.env.example`](.env.example)). The
 | `ETORO_API_KEY` | — (required) | Public API key (`x-api-key`). Alternatives: `ETORO_API_KEY_FILE` or `ETORO_API_KEY_CMD` (see [Securing your setup](#securing-your-setup)). Set exactly one. |
 | `ETORO_USER_KEY` | — (required) | User key (`x-user-key`). Alternatives: `ETORO_USER_KEY_FILE` or `ETORO_USER_KEY_CMD`. Set exactly one. |
 | `ETORO_ENV` | `demo` | `demo` or `real`. Must match the environment of the key pair. |
+| `ETORO_USE_REAL` | unset | `true` or `false`: the same choice as `ETORO_ENV`, as a switch (the MCPB bundle's form uses it, since extension forms have toggles but no drop-down). If both are set they must agree; otherwise the server refuses to start. |
 | `ETORO_ENABLE_WRITE` | `false` | Register the write tools. Needs a key with **Write** permission. |
 | `ETORO_ALLOW_REAL_WRITE` | `false` | Second switch required for write tools when `ETORO_ENV=real`. |
 | `ETORO_ALLOW_TRANSFERS` | `false` | Register the internal-transfer tool (real only, needs both switches above). |
