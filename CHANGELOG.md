@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 — unreleased
+## 0.3.0 — 2026-10-06
 
 **Claude proposes, you execute.** Claude's own rules keep it from executing financial transactions (it refused to call `etoro_confirm_action` even on a demo account, and said so), so the server no longer asks it to: every change is only *prepared* by Claude and executed by you, on a local approval page. This is a breaking change.
 
