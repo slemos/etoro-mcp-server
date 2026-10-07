@@ -20,6 +20,8 @@ All tools are prefixed `etoro_`. Read tools are annotated `readOnlyHint: true`; 
 | `etoro_check_eligibility` | `POST /api/v2/trading/info/eligibility` (computes only; demo: `/info/demo/eligibility`) | `instrumentIds[]` and/or `symbols[]` |
 | `etoro_get_trading_costs` | `POST /api/v2/trading/info/costs` (what-if; demo: `/info/demo/costs`) | `action`, `transaction`, `symbol`/`instrumentId`, `settlementType`, `orderType`, `leverage`, `amountUsd`, `positionIds[]` |
 | `etoro_search_instruments` | `GET /api/v2/market-data/instruments/search` | `query` (1-100 chars), `limit` (1-50, default 10); returns instrumentId, symbol, displayName, type, exchangeId |
+| `etoro_simulate_position` | `GET /api/v1/data/instruments/{instrumentId}/candles` (all pages of the window, bid candles) | `symbol` or `instrumentId`, `from` (ISO 8601 with timezone), `to`, `interval` (1h 4h 1d 1w), `side` (buy/sellShort), `amountUsd`, `leverage` (1-30), `stopLossRate`, `takeProfitRate` (prices). Computed locally; places and prepares nothing |
+| `etoro_backtest` | same candles route | `symbol` or `instrumentId`, `from`, `to`, `interval`, `strategy` (`buy_and_hold` or `dca`), `amountUsd`, `everyDays` (dca). Computed locally; places and prepares nothing |
 | `etoro_get_candles` | `GET /api/v1/data/instruments/{instrumentId}/candles` | `instrumentId`, `interval` (1m 5m 10m 15m 30m 1h 4h 1d 1w), `from`/`to` (ISO 8601 with timezone), `limit` (1-2000, default 100), `side` (bid/ask/both), `cursor`, `summaryOnly`. The answer adds a `summary` computed from the candles returned |
 | `etoro_list_watchlists` | `GET /api/v1/watchlists` | `itemsPerPage`, `includeBuiltin` |
 | `etoro_get_action_status` | – (local: this session's prepared actions, then the history) | `actionId` |

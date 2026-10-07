@@ -1,5 +1,6 @@
 import type { EtoroClient } from "./client.js";
 import { R } from "./endpoints.js";
+import { InputError } from "./errors.js";
 import { extractList } from "./tools/common.js";
 
 export interface Instrument {
@@ -41,4 +42,23 @@ export async function lookupInstruments(client: EtoroClient, ids: number[]): Pro
     }
   }
   return found;
+}
+
+/** Resolves an exact ticker or an id to one eToro instrument, or throws an InputError that says what to do. */
+export async function resolveInstrument(client: EtoroClient, symbol?: string, instrumentId?: number): Promise<Instrument> {
+  if (instrumentId !== undefined) {
+    const list = extractList(await client.call(R.instruments(), { query: { instrumentsIds: [instrumentId], pageSize: 5 } }));
+    const hit = list.map(toInstrument).find((i) => i?.instrumentId === instrumentId);
+    if (!hit) throw new InputError(`Instrument id ${instrumentId} was not found on eToro.`);
+    return hit;
+  }
+  const wanted = (symbol ?? "").toUpperCase();
+  const list = extractList(await client.call(R.instruments(), { query: { symbols: [symbol], pageSize: 20 } }));
+  const matches = list.map(toInstrument).filter((i): i is Instrument => !!i && i.symbol.toUpperCase() === wanted);
+  if (matches.length === 1) return matches[0]!;
+  if (matches.length === 0) {
+    throw new InputError(`No eToro instrument has the symbol "${symbol}". Use etoro_get_instruments to find the exact ticker.`);
+  }
+  const options = matches.map((m) => `${m.symbol} (id ${m.instrumentId}, ${m.displayName ?? m.type ?? "?"})`).join("; ");
+  throw new InputError(`Symbol "${symbol}" matches several instruments: ${options}. Pass instrumentId instead.`);
 }

@@ -3,7 +3,7 @@
   "manifest_version": "0.4",
   "name": "etoro-mcp-server",
   "display_name": "eToro (unofficial)",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Unofficial MCP server for the eToro Public API: read your portfolio and market data, and opt in to preparing orders that you review and execute yourself on a local approval page.",
   "long_description": "Connects Claude to your own eToro account through the eToro Public API.\n\n**Read-only and demo by default.** Placing, closing and cancelling orders must be switched on explicitly, Claude can only prepare an action (eligibility, cost estimate, size caps): you execute it yourself on a local page that opens in your browser, and real-money writes need a second opt-in. API keys are stored in your operating system's keychain and never leave your machine except in requests to eToro.\n\nThis project is not affiliated with, endorsed by or supported by eToro. It is not financial advice. Trading, especially with leverage or CFDs, can lose money.",
   "author": {

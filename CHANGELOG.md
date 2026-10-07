@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.0 — unreleased
+
+What-if questions on past prices, without placing or preparing anything.
+
+### Added
+- `etoro_simulate_position`: a long or short of an amount (with leverage, stop loss and take profit as prices) followed over a window of eToro's historical candles. It reports the entry and exit prices and times, why it ended (stop loss, take profit, margin call or end of data), the result in USD and as a percentage of the amount, and the worst and best moments on the way. A candle that reaches both stop and target counts as the stop first; a gap past a stop closes at the open; with leverage the loss is limited to the amount.
+- `etoro_backtest`: `buy_and_hold` (one purchase at the start) or `dca` (the same amount every N days), unleveraged, with what was invested, units, average cost, final value, result, worst fall and, for dca, the same total invested in one go at the start for comparison.
+- Both follow eToro's candle cursor to fetch the whole window (up to 20,000 candles; a bigger window is refused with advice to use a coarser interval), use bid prices and say plainly what they leave out: spread, fees, overnight costs, slippage, dividends, currency conversion and the order of high and low inside a candle. Every answer is marked `hypothetical` and carries a notice that it is not a prediction or advice. They are read-only tools.
+- Tests: 220.
+
+### Changed
+- Instrument resolution (symbol or id to one instrument) moved to a shared module used by the prepare tools and the simulations.
+
+## 0.5.1 — unreleased
 ## 0.5.1 — 2026-10-07
 
 Closing positions with more information, and cancelling a close that has not executed yet.
