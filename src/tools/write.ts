@@ -2,32 +2,13 @@ import { z } from "zod";
 import type { Proposal, ProposalRow } from "../approval/proposals.js";
 import { transfersEnabled } from "../config.js";
 import { R } from "../endpoints.js";
-import { type Instrument, asRecord, lookupInstruments, toInstrument } from "../instruments.js";
+import { asRecord, lookupInstruments, resolveInstrument } from "../instruments.js";
 import { InputError, PolicyError } from "../errors.js";
 import { estimateClose } from "../closeEstimate.js";
 import { offeredSettlements, settlementOf } from "../settlement.js";
 import { type ToolContext, WRITE, extractList, guarded, ok, explain } from "./common.js";
 
 const id = z.number().int().positive();
-
-async function resolveInstrument(ctx: ToolContext, symbol?: string, instrumentId?: number): Promise<Instrument> {
-  const { client } = ctx;
-  if (instrumentId !== undefined) {
-    const list = extractList(await client.call(R.instruments(), { query: { instrumentsIds: [instrumentId], pageSize: 5 } }));
-    const hit = list.map(toInstrument).find((i) => i?.instrumentId === instrumentId);
-    if (!hit) throw new InputError(`Instrument id ${instrumentId} was not found on eToro.`);
-    return hit;
-  }
-  const wanted = (symbol ?? "").toUpperCase();
-  const list = extractList(await client.call(R.instruments(), { query: { symbols: [symbol], pageSize: 20 } }));
-  const matches = list.map(toInstrument).filter((i): i is Instrument => !!i && i.symbol.toUpperCase() === wanted);
-  if (matches.length === 1) return matches[0]!;
-  if (matches.length === 0) {
-    throw new InputError(`No eToro instrument has the symbol "${symbol}". Use etoro_get_instruments to find the exact ticker.`);
-  }
-  const options = matches.map((m) => `${m.symbol} (id ${m.instrumentId}, ${m.displayName ?? m.type ?? "?"})`).join("; ");
-  throw new InputError(`Symbol "${symbol}" matches several instruments: ${options}. Pass instrumentId instead.`);
-}
 
 async function bestEffort<T>(label: string, warnings: string[], fn: () => Promise<T>): Promise<T | undefined> {
   try {
@@ -124,7 +105,7 @@ export function registerWriteTools(ctx: ToolContext): void {
       if (a.orderType === "limitIOC" && a.limitRate === undefined) throw new InputError("limitRate is required for limitIOC orders.");
 
       const warnings: string[] = [];
-      const instrument = await resolveInstrument(ctx, a.symbol, a.instrumentId);
+      const instrument = await resolveInstrument(ctx.client, a.symbol, a.instrumentId);
       if (/\.RTH$/i.test(instrument.symbol)) {
         warnings.push(
           `${instrument.symbol} is the regular-trading-hours variant of the instrument; the plain ticker is the separate 24/5 instrument ` +
