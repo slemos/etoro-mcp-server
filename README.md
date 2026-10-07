@@ -64,7 +64,7 @@ An AI that can touch a brokerage account deserves more scrutiny than most code, 
 
 Details and the threat model are in [SECURITY.md](SECURITY.md).
 
-**Where it stands (v0.2.0).** Early software. It has been exercised against a live eToro **demo** account: connection check, portfolio, positions, PnL, instrument lookup, eligibility, cost estimates, and placing, following and closing a demo order. Trade history, watchlists, balances and rates are covered by tests but not yet confirmed against a live account, and nothing has been run with real money. Start on demo.
+**Where it stands (v0.4.0).** Early software, tried against a live eToro **demo** account from Claude Desktop: every read tool (connection check, portfolio, positions, PnL, balances, trade history, instrument lookup and text search, rates, candles, eligibility, cost estimates, watchlists), and the prepare → you-execute flow for opening an order and changing a stop loss. Closing and cancelling from Claude Desktop, watchlist changes and transfers are covered by tests but not yet exercised live (the demo script has closed positions), and nothing has been run with real money. Start on demo.
 
 ## Safety model
 
@@ -294,9 +294,8 @@ The script forces `ETORO_ENV=demo` whatever your environment says, stops unless 
 ## Known limitations
 
 - **Very large responses are shortened.** A big portfolio (many positions or copy-trading mirrors) can exceed the output cap; the server then keeps the first N items of each array and says how many there really were. Prefer narrower tools or raise `ETORO_MAX_RESPONSE_CHARS`.
-- **Responses are passed through as eToro sends them.** The shapes come from eToro's reference pages and from a live demo account (see "Where it stands" above); trade history, watchlists, balances and rates have not been confirmed live yet. If a field is missing or renamed, please open an issue with the (redacted) response shape (`--verbose --mask` in the smoke script produces one that is safe to paste).
-- **Some demo *read* paths are inferred** from eToro's documented demo/real naming pattern (marked `inferred` in [`src/endpoints.ts`](src/endpoints.ts)); the demo *write* paths and the demo cost endpoint are documented.
-- **Instrument lookup is by exact ticker or id** (no free-text search). ETF tickers on eToro carry an exchange suffix such as `CSPX.L`.
+- **Responses are passed through as eToro sends them.** The shapes come from eToro's reference pages and from a live demo account (see "Where it stands" above); the actions listed there have been tried live and the rest only through tests. If a field is missing or renamed, please open an issue with the (redacted) response shape (`--verbose --mask` in the smoke script produces one that is safe to paste).
+- **`etoro_get_instruments` is an exact lookup** (ticker or id); use `etoro_search_instruments` for names. ETF tickers on eToro carry an exchange suffix such as `CSPX.L`.
 - **Claude cannot execute, by design.** Claude's own rules keep it from executing financial transactions, so the server never asks it to: it prepares, you press Execute on the approval page. That needs a browser on the same computer (or `ETORO_SHOW_APPROVAL_URL=true` to read the address from the log or result); without a screen, nothing can be executed.
 - **Prepared actions live in memory.** They are forgotten when the server restarts (for example when Claude Desktop restarts it), and expire after `ETORO_CONFIRM_TTL_SECONDS`.
 - Prompt injection is a real risk for any tool-using agent: do not let Claude read untrusted content (web pages, emails, documents) in the same session in which it can prepare real orders, and read the approval page carefully before pressing Execute. If Claude has browser tools, keep `ETORO_SHOW_APPROVAL_URL` off so it never sees the page's address.

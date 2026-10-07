@@ -3,8 +3,10 @@
  * The HTTP client refuses anything that is not described here.
  *
  * Source: https://api-portal.etoro.com (llms.txt index and API reference pages).
- * Routes marked `inferred` follow the documented demo/real naming pattern but
- * were not individually confirmed in the reference pages.
+ * The demo read routes for the portfolio breakdown, PnL, trade history, order lookup
+ * and eligibility follow eToro's documented demo/real naming pattern rather than a
+ * page of their own; each was confirmed against a live demo account (2026-10-06).
+ * Mark a new route `inferred` if you add one that has not been tried live.
  */
 import type { EtoroEnv } from "./config.js";
 
@@ -39,30 +41,30 @@ export const R = {
       "portfolioBreakdown",
       "read",
       "GET",
-      env === "demo" ? "/api/v1/trading/info/demo/portfolio" /* inferred */ : "/api/v1/trading/info/portfolio",
+      env === "demo" ? "/api/v1/trading/info/demo/portfolio" : "/api/v1/trading/info/portfolio",
     ),
   pnl: (env: EtoroEnv) =>
-    route("pnl", "read", "GET", env === "demo" ? "/api/v1/trading/info/demo/pnl" /* inferred */ : "/api/v1/trading/info/real/pnl"),
+    route("pnl", "read", "GET", env === "demo" ? "/api/v1/trading/info/demo/pnl" : "/api/v1/trading/info/real/pnl"),
   tradeHistory: (env: EtoroEnv) =>
     route(
       "tradeHistory",
       "read",
       "GET",
-      env === "demo" ? "/api/v1/trading/info/demo/trade/history" /* inferred */ : "/api/v1/trading/info/trade/history",
+      env === "demo" ? "/api/v1/trading/info/demo/trade/history" : "/api/v1/trading/info/trade/history",
     ),
   orderLookup: (env: EtoroEnv) =>
     route(
       "orderLookup",
       "read",
       "GET",
-      env === "demo" ? "/api/v2/trading/info/demo/orders:lookup" /* inferred */ : "/api/v2/trading/info/orders:lookup",
+      env === "demo" ? "/api/v2/trading/info/demo/orders:lookup" : "/api/v2/trading/info/orders:lookup",
     ),
   eligibility: (env: EtoroEnv) =>
     route(
       "eligibility",
       "read",
       "POST",
-      env === "demo" ? "/api/v2/trading/info/demo/eligibility" /* inferred */ : "/api/v2/trading/info/eligibility",
+      env === "demo" ? "/api/v2/trading/info/demo/eligibility" : "/api/v2/trading/info/eligibility",
     ),
   costs: (env: EtoroEnv) =>
     route("costs", "read", "POST", env === "demo" ? "/api/v2/trading/info/demo/costs" : "/api/v2/trading/info/costs"),

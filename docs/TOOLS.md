@@ -10,14 +10,14 @@ All tools are prefixed `etoro_`. Read tools are annotated `readOnlyHint: true`; 
 |---|---|---|
 | `etoro_check_connection` | `GET /api/v1/me` (identity and key scopes) and the environment's portfolio snapshot route (`pnlLevel=None`) | – |
 | `etoro_get_portfolio` | `GET /api/v1/trading/info/aggregate-portfolio` (demo: `/info/demo/aggregate-portfolio`) | `pnlLevel` (None/Pnl/DailyPnl), `instrumentIds[]` |
-| `etoro_get_portfolio_breakdown` | `GET /api/v1/trading/info/portfolio` (demo: `/info/demo/portfolio`, inferred) | `view` (`summary` default, `mirror`, `raw`), `mirrorId`, `limit` (≤200, default 50), `offset` |
-| `etoro_get_pnl` | `GET /api/v1/trading/info/real/pnl` (demo: `/info/demo/pnl`, inferred) | same as the breakdown: `view`, `mirrorId`, `limit`, `offset` |
+| `etoro_get_portfolio_breakdown` | `GET /api/v1/trading/info/portfolio` (demo: `/info/demo/portfolio`) | `view` (`summary` default, `mirror`, `raw`), `mirrorId`, `limit` (≤200, default 50), `offset` |
+| `etoro_get_pnl` | `GET /api/v1/trading/info/real/pnl` (demo: `/info/demo/pnl`) | same as the breakdown: `view`, `mirrorId`, `limit`, `offset` |
 | `etoro_get_balances` | `GET /api/v1/balances` | `displayCurrency`, `includeZeroBalances`, `includeSubAccounts`, `accountTypes` |
-| `etoro_get_trade_history` | `GET /api/v1/trading/info/trade/history` (demo inferred) | `minDate` (YYYY-MM-DD), `page`, `pageSize` |
-| `etoro_get_order` | `GET /api/v2/trading/info/orders:lookup` (demo inferred) | exactly one of `orderId`, `referenceId` |
+| `etoro_get_trade_history` | `GET /api/v1/trading/info/trade/history` (demo: `/info/demo/...`) | `minDate` (YYYY-MM-DD), `page`, `pageSize` |
+| `etoro_get_order` | `GET /api/v2/trading/info/orders:lookup` (demo: `/info/demo/...`) | exactly one of `orderId`, `referenceId` |
 | `etoro_get_instruments` | `GET /api/v2/market-data/instruments` | `symbols[]` or `instrumentIds[]`, `type`, `pageSize` |
 | `etoro_get_rates` | `GET /api/v1/market-data/instruments/rates` | `instrumentIds[]` (1–100) |
-| `etoro_check_eligibility` | `POST /api/v2/trading/info/eligibility` (computes only; demo inferred) | `instrumentIds[]` and/or `symbols[]` |
+| `etoro_check_eligibility` | `POST /api/v2/trading/info/eligibility` (computes only; demo: `/info/demo/eligibility`) | `instrumentIds[]` and/or `symbols[]` |
 | `etoro_get_trading_costs` | `POST /api/v2/trading/info/costs` (what-if; demo: `/info/demo/costs`) | `action`, `transaction`, `symbol`/`instrumentId`, `settlementType`, `orderType`, `leverage`, `amountUsd`, `positionIds[]` |
 | `etoro_search_instruments` | `GET /api/v2/market-data/instruments/search` | `query` (1-100 chars), `limit` (1-50, default 10); returns instrumentId, symbol, displayName, type, exchangeId |
 | `etoro_get_candles` | `GET /api/v1/data/instruments/{instrumentId}/candles` | `instrumentId`, `interval` (1m 5m 10m 15m 30m 1h 4h 1d 1w), `from`/`to` (ISO 8601 with timezone), `limit` (1-2000, default 100), `side` (bid/ask/both), `cursor`, `summaryOnly`. The answer adds a `summary` computed from the candles returned |

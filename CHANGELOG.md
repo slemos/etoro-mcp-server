@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 — unreleased
+## 0.4.0 — 2026-10-06
 
 Market data for natural questions: find an instrument by name and read how its price moved.
 
@@ -9,6 +9,10 @@ Market data for natural questions: find an instrument by name and read how its p
 - `etoro_get_candles`: historical candles for one instrument (`GET /api/v1/data/instruments/{id}/candles`): interval from 1m to 1w, optional `from`/`to` window (ISO 8601 with a timezone), up to 2000 per call with `cursor` paging, bid/ask/both. The answer includes a `summary` (first open, last close, high, low, percentage change, volume) computed from the candles returned, and `summaryOnly` returns just that.
 - `npm run pack:dev`: a throwaway `.mcpb` versioned `<version>-dev.<n>` for trying changes in Claude Desktop, which only offers updates to higher versions, without spending release numbers.
 - Tests: 160.
+
+### Documentation
+- "Where it stands" now lists what was tried live from Claude Desktop on a demo account: every read tool (including the new search and candles) and opening an order and changing a stop loss through the approval page.
+- The demo read routes that were marked `inferred` (portfolio breakdown, PnL, trade history, order lookup, eligibility) were exercised against a live demo account, so the markers are gone.
 
 ## 0.3.0 — 2026-10-06
 
