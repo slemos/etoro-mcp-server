@@ -26,6 +26,8 @@ This server runs **locally with your privileges** and holds credentials for a br
 
 | Check | What it covers | When |
 |---|---|---|
+| Protected `main` | Direct pushes, force pushes and deletion of `main` are blocked for everyone including the owner; a pull request needs `test` (Node 20 and 22), `bundle`, CodeQL, the dependency audit and the secret scan to pass | Always |
+| OpenSSF Scorecard | An independent score of these practices, published at scorecard.dev | Every push to `main`, weekly |
 | CodeQL (`security-extended` queries) | Static analysis of the TypeScript source | Every push to `main`, every pull request, weekly |
 | `npm audit`, `npm audit signatures` | Known advisories and registry signatures of production dependencies | Same |
 | Gitleaks | Secrets in the repository and its history | Same |

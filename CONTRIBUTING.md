@@ -24,11 +24,13 @@ The test suite uses a mocked eToro API and an in-memory MCP client/server pair: 
 
 ## Pull requests
 
+`main` is protected: nobody can push to it directly, the owner included. Work on a branch, open a pull request, and merge it once the required checks pass (`test (20)`, `test (22)`, `bundle`, `CodeQL (SAST)`, `Dependency audit`, `Secret scan`). No approval is required, because the project has a single maintainer; force pushes and deleting `main` are blocked.
+
 - Keep changes focused; update `README.md`, `docs/TOOLS.md` and `CHANGELOG.md` when behavior changes.
 - `npm run typecheck`, `npm test`, `npm run build` and `npm run security:check` must pass; for packaging changes also run `npm run mcpb:validate`.
 - Bump `VERSION` in `src/version.ts` together with `package.json` and `manifest.json` only in release PRs (a test checks they match).
 
 ## Releasing
 
-1. In a release commit on `main`: bump the three version fields and give the CHANGELOG heading a date (`## 0.3.0 — 2026-11-02`).
-2. Tag that commit `v0.3.0` and push the tag (`v0.3.0-rc.1` makes a pre-release). The Release workflow checks the tag against the three versions, the CHANGELOG and `main`, runs CI and the security checks, builds and attests the bundle, and publishes it with `SHA256SUMS` and an SBOM. It publishes nothing if any step fails.
+1. In a release pull request: bump the three version fields and give the CHANGELOG heading a date (`## 0.3.0 — 2026-11-02`), and merge it.
+2. Tag the merge commit on `main` `v0.3.0` and push the tag (`v0.3.0-rc.1` makes a pre-release). The Release workflow checks the tag against the three versions, the CHANGELOG and `main`, runs CI and the security checks, builds and attests the bundle, and publishes it with `SHA256SUMS` and an SBOM. It publishes nothing if any step fails.
