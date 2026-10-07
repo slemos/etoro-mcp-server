@@ -9,7 +9,7 @@
  *   npm run demo:order -- --symbol AAPL --amount 50
  *
  * Options:
- *   --symbol <ticker>       exact eToro ticker (default AAPL; ETFs carry a suffix, e.g. CSPX.L)
+ *   --symbol <ticker>       exact eToro ticker (default AAPL; ETFs carry a suffix, e.g. EXMPL.L)
  *   --amount <usd>          cash to invest in USD (default 50; the server caps it at ETORO_MAX_ORDER_USD, default 100)
  *   --settlement <real|cfd> force real asset or CFD (default: let eToro decide)
  *   --close-position <id>   instead of opening, close that open DEMO position (previews, asks, executes, verifies)

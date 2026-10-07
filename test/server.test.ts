@@ -6,13 +6,14 @@ const WRITE_TOOLS = [
   "etoro_prepare_close_position",
   "etoro_prepare_modify_position",
   "etoro_prepare_cancel_order",
+  "etoro_prepare_cancel_close_order",
   "etoro_prepare_create_watchlist",
   "etoro_prepare_add_watchlist_items",
   "etoro_prepare_remove_watchlist_items",
   "etoro_prepare_delete_watchlist",
 ];
 
-const openArgs = { symbol: "CSPX.L", side: "buy", amountUsd: 50, settlementType: "cfd" };
+const openArgs = { symbol: "EXMPL.L", side: "buy", amountUsd: 50, settlementType: "cfd" };
 const orderCalls = (calls: RecordedCall[]) =>
   calls.filter((c) => c.method === "POST" && c.path.endsWith("/orders"));
 
@@ -83,7 +84,7 @@ describe("write flow", () => {
     expect(await status(preview)).toMatchObject({ status: "pending" });
 
     const page = await (await fetch(preview.approval.url!)).text();
-    expect(page).toContain("CSPX.L");
+    expect(page).toContain("EXMPL.L");
     expect(page).toContain("DEMO");
     expect(orderCalls(calls)).toHaveLength(0); // looking at the page changes nothing
 
@@ -162,7 +163,7 @@ describe("write flow", () => {
 
   it("warns when no settlement type is given and eToro could pick either, and stays quiet when it is explicit", async () => {
     const ctx = await connect(cfg, orderHandler(offering("real", "cfd")));
-    const implicit = await ctx.prepare("etoro_prepare_open_position", { symbol: "CSPX.L", side: "buy", amountUsd: 10 });
+    const implicit = await ctx.prepare("etoro_prepare_open_position", { symbol: "EXMPL.L", side: "buy", amountUsd: 10 });
     expect((implicit.warnings as string[]).join(" ")).toContain("No settlementType was given, so eToro chooses it");
     expect((implicit.warnings as string[]).join(" ")).toContain("CFD");
     const explicit = await ctx.prepare("etoro_prepare_open_position", { ...openArgs, amountUsd: 10, settlementType: "real" });
@@ -173,7 +174,7 @@ describe("write flow", () => {
 
   it("says so when the account is only offered one settlement type", async () => {
     const ctx = await connect(cfg, orderHandler());
-    const preview = await ctx.prepare("etoro_prepare_open_position", { symbol: "CSPX.L", side: "buy", amountUsd: 10 });
+    const preview = await ctx.prepare("etoro_prepare_open_position", { symbol: "EXMPL.L", side: "buy", amountUsd: 10 });
     expect((preview.warnings as string[]).join(" ")).toContain("eToro offers only 'cfd'");
     expect(preview.summary).toContain("cfd (the only one offered)");
     expect(preview.settlement).toEqual({ requested: null, offered: ["cfd"] });
@@ -182,7 +183,7 @@ describe("write flow", () => {
 
   it("rejects a settlement type the account is not offered, before anything can be executed", async () => {
     const ctx = await connect(cfg, orderHandler());
-    const res = await raw(ctx, { symbol: "CSPX.L", side: "buy", amountUsd: 10, settlementType: "real" });
+    const res = await raw(ctx, { symbol: "EXMPL.L", side: "buy", amountUsd: 10, settlementType: "real" });
     expect(res.isError).toBe(true);
     expect(textOf(res)).toContain("does not offer settlementType 'real'");
     expect(textOf(res)).toContain("eToro offers cfd");
@@ -200,7 +201,7 @@ describe("write flow", () => {
         ? { json: { eligibilities: [{ instrumentId: 1234, leverageConfigs: [{ settlementType: "real", direction: "long" }, { settlementType: "cfd", direction: "short" }] }] } }
         : undefined;
     const ctx = await connect(cfg, orderHandler(longOnlyReal));
-    const short = await raw(ctx, { symbol: "CSPX.L", side: "sellShort", amountUsd: 10, settlementType: "real", leverage: 1, stopLossRate: 900 });
+    const short = await raw(ctx, { symbol: "EXMPL.L", side: "sellShort", amountUsd: 10, settlementType: "real", leverage: 1, stopLossRate: 900 });
     expect(short.isError).toBe(true);
     expect(textOf(short)).toContain("(short)");
     await ctx.close();
@@ -209,7 +210,7 @@ describe("write flow", () => {
   it("does not block when eligibility is unavailable", async () => {
     const down: Handler = (call) => (call.path.endsWith("/eligibility") ? { status: 500, json: { title: "boom" } } : undefined);
     const ctx = await connect(cfg, orderHandler(down));
-    const preview = await ctx.prepare("etoro_prepare_open_position", { symbol: "CSPX.L", side: "buy", amountUsd: 10, settlementType: "real" });
+    const preview = await ctx.prepare("etoro_prepare_open_position", { symbol: "EXMPL.L", side: "buy", amountUsd: 10, settlementType: "real" });
     expect(preview.settlement).toEqual({ requested: "real", offered: null });
     expect((preview.warnings as string[]).join(" ")).toContain("Eligibility check unavailable");
     await ctx.close();
@@ -226,7 +227,7 @@ describe("write flow", () => {
     await ctx.close();
 
     const other = await connect(cfg, orderHandler());
-    const plain = await other.prepare("etoro_prepare_open_position", { symbol: "CSPX.L", side: "buy", amountUsd: 10, settlementType: "cfd" });
+    const plain = await other.prepare("etoro_prepare_open_position", { symbol: "EXMPL.L", side: "buy", amountUsd: 10, settlementType: "cfd" });
     expect((plain.warnings as string[]).join(" ")).not.toContain("regular-trading-hours");
     await other.close();
   });
@@ -246,7 +247,7 @@ describe("write flow", () => {
   it("units-based orders are valued with the market ask for the cap", async () => {
     const ctx = await connect(cfg, orderHandler());
     // 1 unit at ask 846.35 is far above the 100 USD cap.
-    const res = await raw(ctx, { symbol: "CSPX.L", side: "buy", units: 1 });
+    const res = await raw(ctx, { symbol: "EXMPL.L", side: "buy", units: 1 });
     expect(res.isError).toBe(true);
     expect(textOf(res)).toContain("ETORO_MAX_ORDER_USD");
     await ctx.close();
@@ -303,7 +304,7 @@ describe("write flow", () => {
       expect((prep.warnings as string[]).join(" ")).toContain("moves funds from your balance");
       expect(ctx.calls.some((c) => c.method === "PATCH")).toBe(false);
       const page = await (await fetch(prep.approval.url!)).text();
-      expect(page).toContain("CSPX.L");
+      expect(page).toContain("EXMPL.L");
       expect(page).toContain("Current stop loss");
       expect(page).toContain("780");
       await ctx.execute(prep);
@@ -377,7 +378,7 @@ describe("write flow", () => {
     const handler = orderHandler((call) => (call.path.startsWith("/api/v1/watchlists/") ? { json: {} } : undefined));
     const ctx = await connect(cfg, handler);
     const add = await ctx.prepare("etoro_prepare_add_watchlist_items", { watchlistId: "w1", instrumentIds: [1234] });
-    expect(await (await fetch(add.approval.url!)).text()).toContain("CSPX.L");
+    expect(await (await fetch(add.approval.url!)).text()).toContain("EXMPL.L");
     await ctx.execute(add);
     const sentAdd = ctx.calls.find((c) => c.method === "POST" && c.path === "/api/v1/watchlists/w1/items")!;
     expect(sentAdd.body).toEqual([{ itemId: 1234, itemType: "Instrument" }]);

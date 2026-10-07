@@ -24,6 +24,8 @@ The test suite uses a mocked eToro API and an in-memory MCP client/server pair: 
 
 ## Pull requests
 
+Before opening a pull request run `npm run privacy:check`: this repository is public, so tests, docs, examples, commit messages and pull requests must use invented values (ids, names, tickers of a real portfolio, e-mail addresses). Put any names you want to keep out in a local, git-ignored `.privacy-denylist` (one phrase per line).
+
 `main` is protected: nobody can push to it directly, the owner included. Work on a branch, open a pull request, and merge it once the required checks pass (`test (22)`, `test (24)`, `bundle`, `CodeQL (SAST)`, `Dependency audit`, `Secret scan`). No approval is required, because the project has a single maintainer; force pushes and deleting `main` are blocked.
 
 - Keep changes focused; update `README.md`, `docs/TOOLS.md` and `CHANGELOG.md` when behavior changes.

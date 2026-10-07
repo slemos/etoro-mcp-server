@@ -31,6 +31,7 @@ const WRITE_TOOLS = [
   "etoro_prepare_close_position",
   "etoro_prepare_modify_position",
   "etoro_prepare_cancel_order",
+  "etoro_prepare_cancel_close_order",
   "etoro_prepare_create_watchlist",
   "etoro_prepare_add_watchlist_items",
   "etoro_prepare_remove_watchlist_items",

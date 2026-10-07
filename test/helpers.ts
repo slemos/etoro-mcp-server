@@ -100,7 +100,7 @@ export function eligibilityFor(instrumentId: number, settlements: Array<"cfd" | 
   };
 }
 
-/** Typical eToro answers for an order on instrument 1234 (CSPX.L). */
+/** Typical eToro answers for an order on instrument 1234 (EXMPL.L). */
 export function orderHandler(extra?: Handler): Handler {
   return (call) => {
     const custom = extra?.(call);
@@ -120,7 +120,7 @@ export function orderHandler(extra?: Handler): Handler {
           },
         };
       }
-      return { json: { items: [{ instrumentId: 1234, symbol: "CSPX.L", displayName: "iShares Core S&P 500", type: "ETF", exchangeId: 5 }] } };
+      return { json: { items: [{ instrumentId: 1234, symbol: "EXMPL.L", displayName: "Example Index ETF", type: "ETF", exchangeId: 5 }] } };
     }
     if (call.path === "/api/v1/market-data/instruments/rates") return { json: { rates: [{ instrumentID: 1234, ask: 846.35, bid: 846.1 }] } };
     if (call.path.endsWith("/eligibility")) return { json: eligibilityFor(1234, ["cfd"]) };

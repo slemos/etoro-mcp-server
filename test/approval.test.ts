@@ -105,7 +105,7 @@ describe("the write gate", () => {
 
   it("finds the write routes this test is meant to cover", () => {
     const ids = new Set(writeRoutes().map((r) => r.id));
-    for (const id of ["createOrder", "closePosition", "modifyPosition", "cancelOrder", "transfer", "createWatchlist", "addWatchlistItems", "removeWatchlistItems", "deleteWatchlist"]) {
+    for (const id of ["createOrder", "closePosition", "modifyPosition", "cancelOrder", "cancelCloseOrder", "transfer", "createWatchlist", "addWatchlistItems", "removeWatchlistItems", "deleteWatchlist"]) {
       expect(ids.has(id), id).toBe(true);
     }
   });
