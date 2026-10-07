@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { type Config, transfersEnabled, writeEnabled } from "./config.js";
 import type { RouteSpec } from "./endpoints.js";
 import { EtoroApiError, PolicyError } from "./errors.js";
+import { type ApprovalGrant, consumeGrant } from "./approval/grant.js";
 import { redact } from "./redact.js";
 
 export interface CallOptions {
@@ -9,6 +10,8 @@ export interface CallOptions {
   body?: unknown;
   /** Idempotency key. A fresh UUID is generated when omitted. */
   requestId?: string;
+  /** Required for write routes: the permission the proposal store issues when the user presses Execute. */
+  grant?: ApprovalGrant;
 }
 
 type FetchFn = typeof fetch;
@@ -54,6 +57,9 @@ export class EtoroClient {
 
   async call<T = unknown>(route: RouteSpec, opts: CallOptions = {}): Promise<T> {
     this.assertAllowed(route);
+    if (route.kind === "write" && !consumeGrant(opts.grant)) {
+      throw new PolicyError(`Refusing ${route.id}: write routes are only called after the user executes the action on the approval page.`);
+    }
 
     const url = new URL(this.cfg.baseUrl + route.path);
     // An id of "." or ".." survives percent-encoding, and URL parsing then collapses it ("/watchlists/.." becomes

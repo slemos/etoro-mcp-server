@@ -6,7 +6,7 @@ import { lookupInstruments } from "../instruments.js";
 import { type View, compactPortfolio } from "../portfolio.js";
 import { InputError } from "../errors.js";
 import { SERVER_NAME, VERSION } from "../version.js";
-import { type ToolContext, READ, explain, guarded, ok } from "./common.js";
+import { type ToolContext, READ, explain, fail, guarded, ok } from "./common.js";
 
 const id = z.number().int().positive();
 const DOCS = "https://api-portal.etoro.com";
@@ -16,7 +16,7 @@ const DOCS = "https://api-portal.etoro.com";
  * queries are POST requests at eToro but only compute and return data).
  * Responses are returned as eToro sends them.
  */
-export function registerReadTools({ mcp, cfg, client }: ToolContext): void {
+export function registerReadTools({ mcp, cfg, client, store }: ToolContext): void {
   const env = cfg.env;
 
   mcp.registerTool(
@@ -140,13 +140,12 @@ export function registerReadTools({ mcp, cfg, client }: ToolContext): void {
           writeToolsRegistered: writeEnabled(cfg),
           realMoneyWritesAllowed: cfg.env === "real" && writeEnabled(cfg),
           transfersAllowed: transfersEnabled(cfg),
-          requireHumanConfirmation: cfg.requireElicitation,
+          executionByUserOnly: true,
           strictKeyScope: cfg.strictKeyScope,
           maxOrderUsd: cfg.maxOrderUsd,
           maxSessionUsd: cfg.maxSessionUsd,
           maxWritesPerMinute: cfg.maxWritesPerMinute,
         },
-        client: { supportsConfirmationPrompts: Boolean(mcp.server.getClientCapabilities()?.elicitation) },
         server: { name: SERVER_NAME, version: VERSION },
       });
     }),
@@ -404,5 +403,21 @@ export function registerReadTools({ mcp, cfg, client }: ToolContext): void {
         }),
       ),
     ),
+  );
+  mcp.registerTool(
+    "etoro_get_action_status",
+    {
+      title: "Get the status of a prepared eToro action",
+      description:
+        "Where an action prepared by an etoro_prepare_* tool stands: pending (waiting for the user on the approval page), executing, executed (with eToro's answer, such as an order id), " +
+        "rejected, expired or failed. Only the user can execute an action. Memory only: actions are forgotten when the server restarts.",
+      inputSchema: { actionId: z.string().uuid() },
+      annotations: READ("Get the status of a prepared eToro action"),
+    },
+    guarded(async ({ actionId }) => {
+      const proposal = store.get(actionId);
+      if (!proposal) return fail("Unknown actionId. It may have expired and been forgotten, or the server restarted since it was prepared.");
+      return ok(store.view(proposal));
+    }),
   );
 }

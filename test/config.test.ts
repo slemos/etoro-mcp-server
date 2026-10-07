@@ -11,7 +11,9 @@ describe("loadConfig", () => {
     expect(cfg.env).toBe("demo");
     expect(cfg.enableWrite).toBe(false);
     expect(writeEnabled(cfg)).toBe(false);
-    expect(cfg.requireElicitation).toBe(false);
+    expect(cfg.openBrowser).toBe(true);
+    expect(cfg.showApprovalUrl).toBe(false);
+    expect(cfg.confirmTtlMs).toBe(600_000);
     expect(cfg.maxOrderUsd).toBe(100);
   });
 
@@ -44,12 +46,18 @@ describe("loadConfig", () => {
     expect(cfg.maxOrderUsd).toBe(100);
   });
 
+  it("approval page options: open the browser by default, never show the address unless asked, ignore the old elicitation switch", () => {
+    expect(loadConfig({ ...keys, ETORO_OPEN_BROWSER: "false" }).openBrowser).toBe(false);
+    expect(loadConfig({ ...keys, ETORO_SHOW_APPROVAL_URL: "true" }).showApprovalUrl).toBe(true);
+    expect(() => loadConfig({ ...keys, ETORO_OPEN_BROWSER: "sometimes" })).toThrow(/ETORO_OPEN_BROWSER must be/);
+    expect(loadConfig({ ...keys, ETORO_REQUIRE_ELICITATION: "true" }).env).toBe("demo");
+  });
+
   it("real environment requires a second switch before writes exist", () => {
     const writeOnly = loadConfig({ ...keys, ETORO_ENV: "real", ETORO_ENABLE_WRITE: "true" });
     expect(writeEnabled(writeOnly)).toBe(false);
     const both = loadConfig({ ...keys, ETORO_ENV: "real", ETORO_ENABLE_WRITE: "true", ETORO_ALLOW_REAL_WRITE: "true" });
     expect(writeEnabled(both)).toBe(true);
-    expect(both.requireElicitation).toBe(true);
     expect(transfersEnabled(both)).toBe(false);
     const withTransfers = loadConfig({
       ...keys,

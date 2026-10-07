@@ -3,8 +3,8 @@
  * End-to-end test of placing an order on eToro's DEMO environment (virtual money),
  * going through the real MCP server over stdio:
  *
- *   connection check -> instrument lookup -> eligibility -> preview -> your confirmation
- *   -> execute -> follow the order -> (optional) close the position
+ *   connection check -> instrument lookup -> eligibility -> preview -> your confirmation in the terminal
+ *   -> execute (the script presses Execute on the approval page for you) -> follow the order -> (optional) close
  *
  *   npm run demo:order -- --symbol AAPL --amount 50
  *
@@ -17,6 +17,10 @@
  *   -y, --yes               answer yes to the confirmation questions (order and, with --close, the close), so the output can be
  *                           piped to a log:  npm run demo:order -- --symbol AAPL --amount 50 -y 2>&1 | tee demo-order.log
  *   --entry <file>          server entry point (default dist/index.js)
+ *
+ * How it executes: the server only prepares actions; a person executes them on a local approval page. Here that person is
+ * you, answering in the terminal (or -y): the script then does what the page's Execute button does. It starts the server
+ * with ETORO_SHOW_APPROVAL_URL=true so it can read the page's address, and without opening a browser.
  *
  * Safety: this script FORCES ETORO_ENV=demo (whatever your environment says), refuses to continue
  * unless the connection check proves the key reaches your DEMO account, and never offers real money.
@@ -48,9 +52,50 @@ function findPositionId(order) {
   return undefined;
 }
 
+/** Presses Execute on an approval page, the way the browser's form post does. Resolves the HTTP status of the answer. */
+export async function pressExecute(url, fetchFn = fetch) {
+  const page = await (await fetchFn(url)).text();
+  const csrf = /name="csrf" value="([^"]+)"/.exec(page)?.[1];
+  if (!csrf) throw new Error("the approval page did not contain an Execute form (already decided or expired?)");
+  const res = await fetchFn(`${url}/execute`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", origin: new URL(url).origin },
+    body: `csrf=${encodeURIComponent(csrf)}`,
+    redirect: "manual",
+  });
+  return res.status;
+}
+
+/**
+ * Executes a prepared action as the user, then waits for etoro_get_action_status to say how it ended.
+ * Returns { isError, text } like a tool call: the text is eToro's answer when it worked, the error otherwise.
+ */
+async function executeAction(deps, prepared, o) {
+  const url = prepared?.approval?.url;
+  if (!url) return { isError: true, text: "The server did not return the approval page address (it needs ETORO_SHOW_APPROVAL_URL=true)." };
+  let status;
+  try {
+    status = await deps.approve(url);
+  } catch (err) {
+    return { isError: true, text: `Could not press Execute: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  if (status !== 303 && status !== 200) return { isError: true, text: `The approval page answered HTTP ${status}.` };
+  const sleep = deps.sleep ?? sleepMs;
+  for (let attempt = 1; attempt <= (o?.statusAttempts ?? 10); attempt++) {
+    const res = await deps.call("etoro_get_action_status", { actionId: prepared.actionId });
+    const s = parse(res.text);
+    if (s?.status === "executed") return { isError: false, text: JSON.stringify(s.result ?? {}) };
+    if (s?.status === "failed") return { isError: true, text: String(s.error ?? "failed") };
+    if (s && s.status !== "executing" && s.status !== "pending") return { isError: true, text: `The action ended as ${s.status}.` };
+    if (s?.status === "pending" && attempt >= 2) return { isError: true, text: "The server did not execute the action (a local limit may have blocked it; see the server log)." };
+    await sleep(o?.statusPollMs ?? 300);
+  }
+  return { isError: true, text: "Timed out waiting for the action to finish." };
+}
+
 /**
  * The whole flow, with its collaborators injected so it can be tested without a terminal or network.
- *   deps.call(name, args) -> { isError, text }     deps.confirm(question) -> boolean
+ *   deps.call(name, args) -> { isError, text }   deps.confirm(question) -> boolean   deps.approve(url) -> HTTP status of pressing Execute
  */
 export async function runDemoOrder(deps, opts) {
   const log = deps.log ?? console.log;
@@ -97,7 +142,7 @@ export async function runDemoOrder(deps, opts) {
     log("\nCancelled by you. Nothing was sent to eToro.");
     return { ok: false, stage: "declined" };
   }
-  const exec = await call("etoro_confirm_action", { confirmationId: p.confirmationId });
+  const exec = await executeAction(deps, p, o);
   if (exec.isError) return stop("execute", exec.text);
   const accepted = parseAfterNote(exec.text);
   log(`5. eToro accepted the request: ${shorten(JSON.stringify(accepted), 400)}`);
@@ -150,7 +195,7 @@ export async function runDemoOrder(deps, opts) {
     log("\nNot closed. The demo position stays open.");
     return { ok: true, stage: "executed", orderId, positionId };
   }
-  const closed = await call("etoro_confirm_action", { confirmationId: cp.confirmationId });
+  const closed = await executeAction(deps, cp, o);
   if (closed.isError) return stop("close", closed.text);
   log(`   Close request accepted: ${shorten(JSON.stringify(parseAfterNote(closed.text)), 400)}`);
   log("\nDone: opened and closed a demo position through the MCP server.");
@@ -207,7 +252,7 @@ export async function runDemoClose(deps, opts) {
     log("\nCancelled by you. The demo position stays open.");
     return { ok: false, stage: "declined" };
   }
-  const exec = await call("etoro_confirm_action", { confirmationId: p.confirmationId });
+  const exec = await executeAction(deps, p, o);
   if (exec.isError) return stop("close", exec.text);
   log(`4. eToro accepted the close request: ${shorten(JSON.stringify(parseAfterNote(exec.text)), 400)}`);
 
@@ -259,12 +304,15 @@ async function main() {
     process.exit(1);
   }
 
-  // Forced settings: demo only, writes on, terminal confirmation instead of client elicitation.
+  // Forced settings: demo only, writes on. The script plays the person who executes: it reads the approval page's address
+  // from the tool result (ETORO_SHOW_APPROVAL_URL) instead of opening a browser.
   const env = {
     ...process.env,
     ETORO_ENV: "demo",
+    ETORO_USE_REAL: "",
     ETORO_ENABLE_WRITE: "true",
-    ETORO_REQUIRE_ELICITATION: "false",
+    ETORO_SHOW_APPROVAL_URL: "true",
+    ETORO_OPEN_BROWSER: "false",
     ETORO_STRICT_KEY_SCOPE: "false",
   };
   if ((process.env.ETORO_ENV ?? "demo").toLowerCase() !== "demo") {
@@ -282,6 +330,7 @@ async function main() {
       return { isError: Boolean(res.isError), text: res.content?.[0]?.text ?? "" };
     },
     confirm: async (question) => /^y(es)?$/i.test((await rl.question(`\n${question} [y/N] `)).trim()),
+    approve: (url) => pressExecute(url),
   };
 
   try {

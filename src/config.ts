@@ -22,8 +22,10 @@ export interface Config {
   allowRealWrite: boolean;
   /** Extra switch required to register the internal-transfer tool (real environment only). */
   allowTransfers: boolean;
-  /** If true, writes are refused unless the MCP client can ask the human via elicitation. */
-  requireElicitation: boolean;
+  /** Open the approval page in the user's browser when an action is prepared. Default: true. */
+  openBrowser: boolean;
+  /** Include the approval page's address in tool results. That lets the model open it, so it is meant for scripts and headless use. Default: false. */
+  showApprovalUrl: boolean;
   /** Max exposure (amount x leverage) of a single order, in USD. */
   maxOrderUsd: number;
   /** Max total exposure + transfers executed per server process, in USD. */
@@ -240,16 +242,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, io: SecretIo = 
     enableWrite: parseBool("ETORO_ENABLE_WRITE", env.ETORO_ENABLE_WRITE, false),
     allowRealWrite: parseBool("ETORO_ALLOW_REAL_WRITE", env.ETORO_ALLOW_REAL_WRITE, false),
     allowTransfers: parseBool("ETORO_ALLOW_TRANSFERS", env.ETORO_ALLOW_TRANSFERS, false),
-    // Real money defaults to requiring a human in the loop; demo does not.
-    requireElicitation: parseBool(
-      "ETORO_REQUIRE_ELICITATION",
-      env.ETORO_REQUIRE_ELICITATION,
-      etoroEnv === "real",
-    ),
+    openBrowser: parseBool("ETORO_OPEN_BROWSER", env.ETORO_OPEN_BROWSER, true),
+    showApprovalUrl: parseBool("ETORO_SHOW_APPROVAL_URL", env.ETORO_SHOW_APPROVAL_URL, false),
     maxOrderUsd: parseNumber("ETORO_MAX_ORDER_USD", env.ETORO_MAX_ORDER_USD, 100, 1, 1_000_000),
     maxSessionUsd: parseNumber("ETORO_MAX_SESSION_USD", env.ETORO_MAX_SESSION_USD, 500, 1, 10_000_000),
     maxWritesPerMinute: parseNumber("ETORO_MAX_WRITES_PER_MINUTE", env.ETORO_MAX_WRITES_PER_MINUTE, 5, 1, 20),
-    confirmTtlMs: parseNumber("ETORO_CONFIRM_TTL_SECONDS", env.ETORO_CONFIRM_TTL_SECONDS, 300, 30, 3600) * 1000,
+    confirmTtlMs: parseNumber("ETORO_CONFIRM_TTL_SECONDS", env.ETORO_CONFIRM_TTL_SECONDS, 600, 30, 3600) * 1000,
     requestTimeoutMs: 30_000,
     auditLogPath: expandHome(clean(env.ETORO_AUDIT_LOG)),
     // Real money defaults to strict (a real-money setup must use a single-environment key); demo does not.

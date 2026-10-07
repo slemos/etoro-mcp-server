@@ -1,6 +1,6 @@
 # Tool reference
 
-All tools are prefixed `etoro_`. Read tools are annotated `readOnlyHint: true`; write tools `readOnlyHint: false` (with `destructiveHint` set where the action is irreversible). Names are well under 64 characters. Responses are eToro's JSON as returned (truncated with a note above ~120k characters).
+All tools are prefixed `etoro_`. Read tools are annotated `readOnlyHint: true`; the prepare tools `readOnlyHint: false` (they send nothing to eToro, but they register an action and open a page). Names are well under 64 characters. Responses are eToro's JSON as returned (truncated with a note above ~120k characters).
 
 `env` below is the configured `ETORO_ENV` (`demo` or `real`). Reference pages live under <https://api-portal.etoro.com>.
 
@@ -20,18 +20,20 @@ All tools are prefixed `etoro_`. Read tools are annotated `readOnlyHint: true`; 
 | `etoro_check_eligibility` | `POST /api/v2/trading/info/eligibility` (computes only; demo inferred) | `instrumentIds[]` and/or `symbols[]` |
 | `etoro_get_trading_costs` | `POST /api/v2/trading/info/costs` (what-if; demo: `/info/demo/costs`) | `action`, `transaction`, `symbol`/`instrumentId`, `settlementType`, `orderType`, `leverage`, `amountUsd`, `positionIds[]` |
 | `etoro_list_watchlists` | `GET /api/v1/watchlists` | `itemsPerPage`, `includeBuiltin` |
+| `etoro_get_action_status` | – (local: the server's prepared actions) | `actionId` |
 
 ## Write tools (registered only with `ETORO_ENABLE_WRITE=true`; real needs `ETORO_ALLOW_REAL_WRITE=true`)
 
-### Two-step trading actions
+### Prepare-only actions: Claude proposes, the user executes
 
-| Tool | What it does | Executed route (on confirm) |
+Every write tool only registers a proposal and opens an approval page (`http://127.0.0.1:<port>/t/<secret>`) in the user's browser. Pressing **Execute** there sends the request to eToro; **Reject**, or waiting past `ETORO_CONFIRM_TTL_SECONDS` (default 10 minutes), sends nothing. Each prepare tool returns an `actionId` and `approval: { status: "awaiting_user", pageOpened }`; the page's address is included only with `ETORO_SHOW_APPROVAL_URL=true`. Follow an action with `etoro_get_action_status` (read-only). Local limits (per-minute writes, session exposure) apply when the user presses Execute; a blocked action stays pending and can be executed again.
+
+| Tool | What it does | Route sent when the user executes |
 |---|---|---|
-| `etoro_prepare_open_position` | Resolves the instrument, checks eligibility and costs, enforces `ETORO_MAX_ORDER_USD`, returns a `confirmationId` | `POST /api/v2/trading/execution/orders` (demo: `/execution/demo/orders`) |
+| `etoro_prepare_open_position` | Resolves the instrument, checks eligibility and costs, enforces `ETORO_MAX_ORDER_USD`, returns an `actionId` | `POST /api/v2/trading/execution/orders` (demo: `/execution/demo/orders`) |
 | `etoro_prepare_close_position` | Previews closing a position (`positionId`, `instrumentId`, optional `unitsToDeduct`; omit to close all) | `POST /api/v1/trading/execution/market-close-orders/positions/{positionId}` (demo: `/execution/demo/...`) |
 | `etoro_prepare_cancel_order` | Previews cancelling a pending order (`orderId`) | `DELETE /api/v2/trading/execution/orders/{orderId}` (demo: `/execution/demo/orders/{orderId}`) |
 | `etoro_prepare_transfer` | Previews an internal account-to-account transfer. **Real only**, needs `ETORO_ALLOW_TRANSFERS=true` | `POST /api/v1/money/transfers` |
-| `etoro_confirm_action` | Executes a previewed action by `confirmationId`: single use, expires after `ETORO_CONFIRM_TTL_SECONDS`, subject to the write rate limit and session cap, and asks the user via elicitation when the client supports it | – |
 
 The preview checks `settlementType` against the account's eligibility for that instrument and direction (long or short) and rejects one that is not offered; it returns `settlement: { requested, offered }` (`offered` is `null` when the eligibility check was unavailable, in which case nothing is blocked). If you omit `settlementType` and only one type is offered, the summary says which one the order will use. A symbol ending in `.RTH` is the regular-trading-hours instrument and gets a warning.
 
@@ -43,10 +45,12 @@ Rules enforced before a preview is created (mirroring eToro's documented constra
 
 | Tool | Route |
 |---|---|
-| `etoro_create_watchlist` | `POST /api/v1/watchlists?name=&type=` |
-| `etoro_add_watchlist_items` | `POST /api/v1/watchlists/{id}/items` |
-| `etoro_remove_watchlist_items` | `DELETE /api/v1/watchlists/{id}/items` (asks for approval when the client supports it) |
-| `etoro_delete_watchlist` | `DELETE /api/v1/watchlists/{id}` (asks for approval when the client supports it) |
+| `etoro_prepare_create_watchlist` | `POST /api/v1/watchlists?name=&type=` |
+| `etoro_prepare_add_watchlist_items` | `POST /api/v1/watchlists/{id}/items` |
+| `etoro_prepare_remove_watchlist_items` | `DELETE /api/v1/watchlists/{id}/items` |
+| `etoro_prepare_delete_watchlist` | `DELETE /api/v1/watchlists/{id}` |
+
+These follow the same rule as orders: the tool only prepares, and the route above is called when the user presses Execute on the approval page (the page lists instrument names for item changes).
 
 ## Environment verification
 

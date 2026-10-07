@@ -1,15 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { API_KEY, ME, USER_KEY, type Handler, type RecordedCall, baseCfg, connect, eligibilityFor, orderHandler, textOf } from "./helpers.js";
+import { API_KEY, ME, USER_KEY, type Handler, type RecordedCall, baseCfg, connect, eligibilityFor, orderHandler, pressButton, textOf } from "./helpers.js";
 
 const WRITE_TOOLS = [
   "etoro_prepare_open_position",
   "etoro_prepare_close_position",
   "etoro_prepare_cancel_order",
-  "etoro_confirm_action",
-  "etoro_create_watchlist",
-  "etoro_add_watchlist_items",
-  "etoro_remove_watchlist_items",
-  "etoro_delete_watchlist",
+  "etoro_prepare_create_watchlist",
+  "etoro_prepare_add_watchlist_items",
+  "etoro_prepare_remove_watchlist_items",
+  "etoro_prepare_delete_watchlist",
 ];
 
 const openArgs = { symbol: "CSPX.L", side: "buy", amountUsd: 50, settlementType: "cfd" };
@@ -46,8 +45,9 @@ describe("tool surface", () => {
     for (const w of WRITE_TOOLS) expect(names).toContain(w);
     expect(names).not.toContain("etoro_prepare_transfer");
     const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
-    expect(byName.etoro_confirm_action!.annotations?.destructiveHint).toBe(true);
-    expect(byName.etoro_confirm_action!.annotations?.readOnlyHint).toBe(false);
+    expect(names).not.toContain("etoro_confirm_action"); // nothing Claude can call executes an action
+    expect(byName.etoro_get_action_status!.annotations?.readOnlyHint).toBe(true);
+    for (const w of WRITE_TOOLS) expect(byName[w]!.annotations?.readOnlyHint).toBe(false);
     expect(byName.etoro_get_rates!.annotations?.readOnlyHint).toBe(true);
     // Read and write are separate tools: no read tool is marked as a writer.
     for (const t of tools) {
@@ -66,19 +66,27 @@ describe("tool surface", () => {
 
 describe("write flow", () => {
   const cfg = baseCfg({ enableWrite: true });
+  const offering = (...settlements: Array<"cfd" | "real">): Handler => (call) =>
+    call.path.endsWith("/eligibility") ? { json: eligibilityFor(1234, settlements) } : undefined;
+  const raw = (ctx: { client: { callTool: (a: { name: string; arguments: Record<string, unknown> }) => Promise<unknown> } }, args: Record<string, unknown>) =>
+    ctx.client.callTool({ name: "etoro_prepare_open_position", arguments: args }) as Promise<{ isError?: boolean; content: Array<{ text?: string }> }>;
 
-  it("preview sends nothing; confirm (user accepts) places exactly one order; replay is idempotent", async () => {
-    const { client, calls, prompts, auditLines, close } = await connect(cfg, orderHandler(), "accept");
-    const prep = await client.callTool({ name: "etoro_prepare_open_position", arguments: openArgs });
-    expect(prep.isError).toBeFalsy();
-    const preview = JSON.parse(textOf(prep));
-    expect(preview.confirmationId).toMatch(/^[0-9a-f-]{36}$/);
-    expect(preview.estimatedCosts.costs[0].costType).toBe("markup");
+  it("a preview sends nothing and opens the approval page; only the user pressing Execute places exactly one order", async () => {
+    const { prepare, execute, status, calls, opened, auditLines, close } = await connect(cfg, orderHandler());
+    const preview = await prepare("etoro_prepare_open_position", openArgs);
+    expect(preview.actionId).toMatch(/^[0-9a-f-]{36}$/);
+    expect((preview.estimatedCosts as { costs: Array<{ costType: string }> }).costs[0]!.costType).toBe("markup");
+    expect(preview.approval).toMatchObject({ status: "awaiting_user", pageOpened: true });
+    expect(opened).toEqual([preview.approval.url]);
     expect(orderCalls(calls)).toHaveLength(0);
+    expect(await status(preview)).toMatchObject({ status: "pending" });
 
-    const done = await client.callTool({ name: "etoro_confirm_action", arguments: { confirmationId: preview.confirmationId } });
-    expect(done.isError).toBeFalsy();
-    expect(prompts[0]).toContain("CSPX.L");
+    const page = await (await fetch(preview.approval.url!)).text();
+    expect(page).toContain("CSPX.L");
+    expect(page).toContain("DEMO");
+    expect(orderCalls(calls)).toHaveLength(0); // looking at the page changes nothing
+
+    expect((await execute(preview)).status).toBe(303);
     const orders = orderCalls(calls);
     expect(orders).toHaveLength(1);
     expect(orders[0]!.path).toBe("/api/v2/trading/execution/demo/orders");
@@ -92,55 +100,96 @@ describe("write flow", () => {
       amount: 50,
       orderCurrency: "usd",
     });
-    expect(textOf(done)).toContain('"orderId": 99');
+    expect(await status(preview)).toMatchObject({ status: "executed", result: { orderId: 99 } });
 
-    const replay = await client.callTool({ name: "etoro_confirm_action", arguments: { confirmationId: preview.confirmationId } });
-    expect(textOf(replay)).toContain("already executed");
+    // Pressing again never sends a second order.
+    await pressButton(preview.approval.url!, "execute");
     expect(orderCalls(calls)).toHaveLength(1);
 
     const audit = auditLines.join("\n");
     expect(audit).toContain("prepared");
+    expect(audit).toContain("approved_by_user");
     expect(audit).toContain("executed");
     expect(audit).not.toContain(API_KEY);
     expect(audit).not.toContain(USER_KEY);
     await close();
   });
 
-  const prepare = async (client: Awaited<ReturnType<typeof connect>>["client"], args: Record<string, unknown>) =>
-    client.callTool({ name: "etoro_prepare_open_position", arguments: args });
-  const offering = (...settlements: Array<"cfd" | "real">): Handler => (call) =>
-    call.path.endsWith("/eligibility") ? { json: eligibilityFor(1234, settlements) } : undefined;
+  it("rejecting on the page sends nothing, and a rejected action cannot be executed later", async () => {
+    const { prepare, reject, status, calls, close } = await connect(cfg, orderHandler());
+    const preview = await prepare("etoro_prepare_open_position", openArgs);
+    expect((await reject(preview)).status).toBe(303);
+    expect(await status(preview)).toMatchObject({ status: "rejected" });
+    await pressButton(preview.approval.url!, "execute");
+    expect(orderCalls(calls)).toHaveLength(0);
+    expect(await status(preview)).toMatchObject({ status: "rejected" });
+    await close();
+  });
+
+  it("the status tool reports an unknown action as an error", async () => {
+    const { client, close } = await connect(cfg, orderHandler());
+    const res = await client.callTool({ name: "etoro_get_action_status", arguments: { actionId: "00000000-0000-4000-8000-000000000000" } });
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toContain("Unknown actionId");
+    await close();
+  });
+
+  it("the model never sees the approval address unless ETORO_SHOW_APPROVAL_URL is on", async () => {
+    const hidden = await connect(baseCfg({ enableWrite: true, showApprovalUrl: false }), orderHandler());
+    const text = textOf(await hidden.client.callTool({ name: "etoro_prepare_open_position", arguments: openArgs }));
+    expect(text).not.toContain("127.0.0.1");
+    expect(text).not.toContain("/t/");
+    const out = JSON.parse(text);
+    expect(out.approval).toEqual({ status: "awaiting_user", pageOpened: true });
+    // The address went only to the browser opener, and the status tool never exposes it.
+    expect(hidden.opened).toHaveLength(1);
+    const token = new URL(hidden.opened[0]!).pathname.split("/")[2]!;
+    const status = textOf(await hidden.client.callTool({ name: "etoro_get_action_status", arguments: { actionId: out.actionId } }));
+    expect(status).not.toContain(token);
+    expect(status).not.toContain("127.0.0.1");
+    expect(text).not.toContain(token);
+    await hidden.close();
+  });
+
+  it("says so when the page could not be opened", async () => {
+    const { client, close } = await connect(baseCfg({ enableWrite: true, showApprovalUrl: false }), orderHandler(), { openUrl: async () => false });
+    const out = JSON.parse(textOf(await client.callTool({ name: "etoro_prepare_open_position", arguments: openArgs })));
+    expect(out.approval.pageOpened).toBe(false);
+    expect(out.note).toContain("could not be opened automatically");
+    await close();
+  });
 
   it("warns when no settlement type is given and eToro could pick either, and stays quiet when it is explicit", async () => {
-    const { client, close } = await connect(cfg, orderHandler(offering("real", "cfd")), "accept");
-    const implicit = JSON.parse(textOf(await prepare(client, { symbol: "CSPX.L", side: "buy", amountUsd: 10 })));
-    expect(implicit.warnings.join(" ")).toContain("No settlementType was given, so eToro chooses it");
-    expect(implicit.warnings.join(" ")).toContain("CFD");
-    const explicit = JSON.parse(textOf(await prepare(client, { ...openArgs, amountUsd: 10, settlementType: "real" })));
-    expect(explicit.warnings.join(" ")).not.toContain("No settlementType");
+    const ctx = await connect(cfg, orderHandler(offering("real", "cfd")));
+    const implicit = await ctx.prepare("etoro_prepare_open_position", { symbol: "CSPX.L", side: "buy", amountUsd: 10 });
+    expect((implicit.warnings as string[]).join(" ")).toContain("No settlementType was given, so eToro chooses it");
+    expect((implicit.warnings as string[]).join(" ")).toContain("CFD");
+    const explicit = await ctx.prepare("etoro_prepare_open_position", { ...openArgs, amountUsd: 10, settlementType: "real" });
+    expect((explicit.warnings as string[]).join(" ")).not.toContain("No settlementType");
     expect(explicit.settlement).toEqual({ requested: "real", offered: ["real", "cfd"] });
-    await close();
+    await ctx.close();
   });
 
   it("says so when the account is only offered one settlement type", async () => {
-    const { client, close } = await connect(cfg, orderHandler(), "accept");
-    const preview = JSON.parse(textOf(await prepare(client, { symbol: "CSPX.L", side: "buy", amountUsd: 10 })));
-    expect(preview.warnings.join(" ")).toContain("eToro offers only 'cfd'");
+    const ctx = await connect(cfg, orderHandler());
+    const preview = await ctx.prepare("etoro_prepare_open_position", { symbol: "CSPX.L", side: "buy", amountUsd: 10 });
+    expect((preview.warnings as string[]).join(" ")).toContain("eToro offers only 'cfd'");
     expect(preview.summary).toContain("cfd (the only one offered)");
     expect(preview.settlement).toEqual({ requested: null, offered: ["cfd"] });
-    await close();
+    await ctx.close();
   });
 
-  it("rejects a settlement type the account is not offered, before anything can be confirmed", async () => {
-    const { client, calls, auditLines, close } = await connect(cfg, orderHandler(), "accept");
-    const res = await prepare(client, { symbol: "CSPX.L", side: "buy", amountUsd: 10, settlementType: "real" });
+  it("rejects a settlement type the account is not offered, before anything can be executed", async () => {
+    const ctx = await connect(cfg, orderHandler());
+    const res = await raw(ctx, { symbol: "CSPX.L", side: "buy", amountUsd: 10, settlementType: "real" });
     expect(res.isError).toBe(true);
     expect(textOf(res)).toContain("does not offer settlementType 'real'");
     expect(textOf(res)).toContain("eToro offers cfd");
-    expect(auditLines.join("\n")).not.toContain("prepared");
-    expect(calls.some((c) => c.path.endsWith("/costs"))).toBe(false);
-    expect(orderCalls(calls)).toHaveLength(0);
-    await close();
+    expect(ctx.auditLines.join("\n")).not.toContain("prepared");
+    expect(ctx.opened).toHaveLength(0); // no approval page was opened
+    expect(ctx.calls.some((c) => c.path.endsWith("/costs"))).toBe(false);
+    expect(orderCalls(ctx.calls)).toHaveLength(0);
+    await ctx.close();
   });
 
   it("only compares settlement types with the direction being opened", async () => {
@@ -149,20 +198,20 @@ describe("write flow", () => {
       call.path.endsWith("/eligibility")
         ? { json: { eligibilities: [{ instrumentId: 1234, leverageConfigs: [{ settlementType: "real", direction: "long" }, { settlementType: "cfd", direction: "short" }] }] } }
         : undefined;
-    const { client, close } = await connect(cfg, orderHandler(longOnlyReal), "accept");
-    const short = await prepare(client, { symbol: "CSPX.L", side: "sellShort", amountUsd: 10, settlementType: "real", leverage: 1, stopLossRate: 900 });
+    const ctx = await connect(cfg, orderHandler(longOnlyReal));
+    const short = await raw(ctx, { symbol: "CSPX.L", side: "sellShort", amountUsd: 10, settlementType: "real", leverage: 1, stopLossRate: 900 });
     expect(short.isError).toBe(true);
     expect(textOf(short)).toContain("(short)");
-    await close();
+    await ctx.close();
   });
 
   it("does not block when eligibility is unavailable", async () => {
     const down: Handler = (call) => (call.path.endsWith("/eligibility") ? { status: 500, json: { title: "boom" } } : undefined);
-    const { client, close } = await connect(cfg, orderHandler(down), "accept");
-    const preview = JSON.parse(textOf(await prepare(client, { symbol: "CSPX.L", side: "buy", amountUsd: 10, settlementType: "real" })));
+    const ctx = await connect(cfg, orderHandler(down));
+    const preview = await ctx.prepare("etoro_prepare_open_position", { symbol: "CSPX.L", side: "buy", amountUsd: 10, settlementType: "real" });
     expect(preview.settlement).toEqual({ requested: "real", offered: null });
-    expect(preview.warnings.join(" ")).toContain("Eligibility check unavailable");
-    await close();
+    expect((preview.warnings as string[]).join(" ")).toContain("Eligibility check unavailable");
+    await ctx.close();
   });
 
   it("flags the regular-trading-hours variant of an instrument", async () => {
@@ -170,97 +219,56 @@ describe("write flow", () => {
       call.path === "/api/v2/market-data/instruments"
         ? { json: { items: [{ instrumentId: 1234, symbol: "AAPL.RTH", displayName: "Apple", type: "Stocks" }] } }
         : undefined;
-    const { client, close } = await connect(cfg, orderHandler(rth), "accept");
-    const preview = JSON.parse(textOf(await prepare(client, { symbol: "AAPL.RTH", side: "buy", amountUsd: 10, settlementType: "cfd" })));
-    expect(preview.warnings.join(" ")).toContain("regular-trading-hours variant");
-    await close();
+    const ctx = await connect(cfg, orderHandler(rth));
+    const preview = await ctx.prepare("etoro_prepare_open_position", { symbol: "AAPL.RTH", side: "buy", amountUsd: 10, settlementType: "cfd" });
+    expect((preview.warnings as string[]).join(" ")).toContain("regular-trading-hours variant");
+    await ctx.close();
 
-    const other = await connect(cfg, orderHandler(), "accept");
-    const plain = JSON.parse(textOf(await prepare(other.client, { symbol: "CSPX.L", side: "buy", amountUsd: 10, settlementType: "cfd" })));
-    expect(plain.warnings.join(" ")).not.toContain("regular-trading-hours");
+    const other = await connect(cfg, orderHandler());
+    const plain = await other.prepare("etoro_prepare_open_position", { symbol: "CSPX.L", side: "buy", amountUsd: 10, settlementType: "cfd" });
+    expect((plain.warnings as string[]).join(" ")).not.toContain("regular-trading-hours");
     await other.close();
   });
 
-  it("a declined confirmation sends nothing", async () => {
-    const { client, calls, close } = await connect(cfg, orderHandler(), "decline");
-    const prep = JSON.parse(textOf(await client.callTool({ name: "etoro_prepare_open_position", arguments: openArgs })));
-    const res = await client.callTool({ name: "etoro_confirm_action", arguments: { confirmationId: prep.confirmationId } });
-    expect(res.isError).toBe(true);
-    expect(textOf(res)).toContain("declined");
-    expect(orderCalls(calls)).toHaveLength(0);
-    await close();
-  });
-
-  it("when a human is required and the client cannot ask, nothing is sent", async () => {
-    const strict = baseCfg({ enableWrite: true, requireElicitation: true });
-    const { client, calls, close } = await connect(strict, orderHandler(), "none");
-    const prep = JSON.parse(textOf(await client.callTool({ name: "etoro_prepare_open_position", arguments: openArgs })));
-    const res = await client.callTool({ name: "etoro_confirm_action", arguments: { confirmationId: prep.confirmationId } });
-    expect(res.isError).toBe(true);
-    expect(textOf(res)).toContain("ETORO_REQUIRE_ELICITATION");
-    expect(orderCalls(calls)).toHaveLength(0);
-    await close();
-  });
-
-  it("without the human requirement the token flow alone executes", async () => {
-    const { client, calls, close } = await connect(cfg, orderHandler(), "none");
-    const prep = JSON.parse(textOf(await client.callTool({ name: "etoro_prepare_open_position", arguments: openArgs })));
-    const res = await client.callTool({ name: "etoro_confirm_action", arguments: { confirmationId: prep.confirmationId } });
-    expect(res.isError).toBeFalsy();
-    expect(orderCalls(calls)).toHaveLength(1);
-    await close();
-  });
-
   it("rejects orders above the per-order exposure cap (amount x leverage)", async () => {
-    const { client, calls, close } = await connect(cfg, orderHandler(), "accept");
-    const big = await client.callTool({ name: "etoro_prepare_open_position", arguments: { ...openArgs, amountUsd: 500 } });
+    const ctx = await connect(cfg, orderHandler());
+    const big = await raw(ctx, { ...openArgs, amountUsd: 500 });
     expect(big.isError).toBe(true);
     expect(textOf(big)).toContain("ETORO_MAX_ORDER_USD");
-    const levered = await client.callTool({
-      name: "etoro_prepare_open_position",
-      arguments: { ...openArgs, amountUsd: 60, leverage: 2, stopLossRate: 700 },
-    });
+    const levered = await raw(ctx, { ...openArgs, amountUsd: 60, leverage: 2, stopLossRate: 700 });
     expect(levered.isError).toBe(true);
-    expect(orderCalls(calls)).toHaveLength(0);
-    await close();
+    expect(orderCalls(ctx.calls)).toHaveLength(0);
+    expect(ctx.opened).toHaveLength(0);
+    await ctx.close();
   });
 
   it("units-based orders are valued with the market ask for the cap", async () => {
-    const { client, close } = await connect(cfg, orderHandler(), "accept");
+    const ctx = await connect(cfg, orderHandler());
     // 1 unit at ask 846.35 is far above the 100 USD cap.
-    const res = await client.callTool({
-      name: "etoro_prepare_open_position",
-      arguments: { symbol: "CSPX.L", side: "buy", units: 1 },
-    });
+    const res = await raw(ctx, { symbol: "CSPX.L", side: "buy", units: 1 });
     expect(res.isError).toBe(true);
     expect(textOf(res)).toContain("ETORO_MAX_ORDER_USD");
-    await close();
+    await ctx.close();
   });
 
   it("validates cross-field rules", async () => {
-    const { client, calls, close } = await connect(cfg, orderHandler(), "accept");
-    const both = await client.callTool({ name: "etoro_prepare_open_position", arguments: { ...openArgs, units: 1 } });
-    expect(both.isError).toBe(true);
-    const noStop = await client.callTool({ name: "etoro_prepare_open_position", arguments: { ...openArgs, side: "sellShort" } });
-    expect(textOf(noStop)).toContain("stopLossRate");
-    const noInstrument = await client.callTool({ name: "etoro_prepare_open_position", arguments: { side: "buy", amountUsd: 10 } });
-    expect(noInstrument.isError).toBe(true);
-    expect(orderCalls(calls)).toHaveLength(0);
-    await close();
+    const ctx = await connect(cfg, orderHandler());
+    expect((await raw(ctx, { ...openArgs, units: 1 })).isError).toBe(true);
+    expect(textOf(await raw(ctx, { ...openArgs, side: "sellShort" }))).toContain("stopLossRate");
+    expect((await raw(ctx, { side: "buy", amountUsd: 10 })).isError).toBe(true);
+    expect(orderCalls(ctx.calls)).toHaveLength(0);
+    await ctx.close();
   });
 
   it("ambiguous symbols ask for an instrumentId", async () => {
-    const { client, close } = await connect(cfg, orderHandler(), "accept");
-    const res = await client.callTool({
-      name: "etoro_prepare_open_position",
-      arguments: { symbol: "AMBIG", side: "buy", amountUsd: 10 },
-    });
+    const ctx = await connect(cfg, orderHandler());
+    const res = await raw(ctx, { symbol: "AMBIG", side: "buy", amountUsd: 10 });
     expect(res.isError).toBe(true);
     expect(textOf(res)).toContain("instrumentId");
-    await close();
+    await ctx.close();
   });
 
-  it("closing sends the documented body for the right environment", async () => {
+  it("closing sends the documented body for the right environment, after the user executes", async () => {
     const handler = orderHandler((call) =>
       call.method === "POST" && call.path.includes("market-close-orders")
         ? { json: { orderForClose: { orderID: 5 }, token: "t" } }
@@ -268,50 +276,85 @@ describe("write flow", () => {
           ? { json: { clientPortfolio: { positions: [{ positionID: 777, instrumentID: 1234, units: 2 }] } } }
           : undefined,
     );
-    const { client, calls, close } = await connect(cfg, handler, "accept");
-    const prep = JSON.parse(
-      textOf(await client.callTool({ name: "etoro_prepare_close_position", arguments: { positionId: 777, instrumentId: 1234 } })),
-    );
-    expect(prep.matchedPosition.positionID).toBe(777);
-    await client.callTool({ name: "etoro_confirm_action", arguments: { confirmationId: prep.confirmationId } });
-    const close_ = calls.find((c) => c.path.includes("market-close-orders"))!;
-    expect(close_.path).toBe("/api/v1/trading/execution/demo/market-close-orders/positions/777");
-    expect(close_.body).toEqual({ InstrumentID: 1234, UnitsToDeduct: null });
-    await close();
+    const ctx = await connect(cfg, handler);
+    const prep = await ctx.prepare("etoro_prepare_close_position", { positionId: 777, instrumentId: 1234 });
+    expect((prep.matchedPosition as { positionID: number }).positionID).toBe(777);
+    expect(ctx.calls.some((c) => c.path.includes("market-close-orders"))).toBe(false);
+    await ctx.execute(prep);
+    const sent = ctx.calls.find((c) => c.path.includes("market-close-orders"))!;
+    expect(sent.path).toBe("/api/v1/trading/execution/demo/market-close-orders/positions/777");
+    expect(sent.body).toEqual({ InstrumentID: 1234, UnitsToDeduct: null });
+    await ctx.close();
   });
 
-  it("cancelling goes through the same preview and confirmation", async () => {
+  it("cancelling goes through the same preview and the user's Execute", async () => {
     const handler = orderHandler((call) => (call.method === "DELETE" ? { json: { token: "t" } } : undefined));
-    const { client, calls, close } = await connect(cfg, handler, "accept");
-    const prep = JSON.parse(textOf(await client.callTool({ name: "etoro_prepare_cancel_order", arguments: { orderId: 55 } })));
-    expect(calls.some((c) => c.method === "DELETE")).toBe(false);
-    await client.callTool({ name: "etoro_confirm_action", arguments: { confirmationId: prep.confirmationId } });
-    const del = calls.find((c) => c.method === "DELETE")!;
+    const ctx = await connect(cfg, handler);
+    const prep = await ctx.prepare("etoro_prepare_cancel_order", { orderId: 55 });
+    expect(ctx.calls.some((c) => c.method === "DELETE")).toBe(false);
+    await ctx.execute(prep);
+    const del = ctx.calls.find((c) => c.method === "DELETE")!;
     expect(del.path).toBe("/api/v2/trading/execution/demo/orders/55");
-    await close();
+    await ctx.close();
   });
 
-  it("an unknown confirmationId is rejected", async () => {
-    const { client, calls, close } = await connect(cfg, orderHandler(), "accept");
-    const res = await client.callTool({
-      name: "etoro_confirm_action",
-      arguments: { confirmationId: "00000000-0000-4000-8000-000000000000" },
-    });
-    expect(res.isError).toBe(true);
-    expect(orderCalls(calls)).toHaveLength(0);
-    await close();
+  it("watchlist changes are proposals too: nothing is sent until the user executes", async () => {
+    const handler = orderHandler((call) => (call.path === "/api/v1/watchlists" && call.method === "POST" ? { json: { id: "w1" } } : undefined));
+    const ctx = await connect(cfg, handler);
+    const prep = await ctx.prepare("etoro_prepare_create_watchlist", { name: "Prueba" });
+    expect(ctx.calls.some((c) => c.path.startsWith("/api/v1/watchlists"))).toBe(false);
+    const page = await (await fetch(prep.approval.url!)).text();
+    expect(page).toContain("Prueba");
+    await ctx.execute(prep);
+    const sent = ctx.calls.find((c) => c.path === "/api/v1/watchlists")!;
+    expect(sent.method).toBe("POST");
+    expect(sent.query).toEqual({ name: "Prueba", type: "Static" });
+    await ctx.close();
   });
 
-  it("enforces the per-minute write limit across confirmations", async () => {
+  it("watchlist item changes show instrument names on the page and use the documented bodies", async () => {
+    const handler = orderHandler((call) => (call.path.startsWith("/api/v1/watchlists/") ? { json: {} } : undefined));
+    const ctx = await connect(cfg, handler);
+    const add = await ctx.prepare("etoro_prepare_add_watchlist_items", { watchlistId: "w1", instrumentIds: [1234] });
+    expect(await (await fetch(add.approval.url!)).text()).toContain("CSPX.L");
+    await ctx.execute(add);
+    const sentAdd = ctx.calls.find((c) => c.method === "POST" && c.path === "/api/v1/watchlists/w1/items")!;
+    expect(sentAdd.body).toEqual([{ itemId: 1234, itemType: "Instrument" }]);
+    const remove = await ctx.prepare("etoro_prepare_remove_watchlist_items", { watchlistId: "w1", instrumentIds: [1234] });
+    const del = await ctx.prepare("etoro_prepare_delete_watchlist", { watchlistId: "w1" });
+    expect(ctx.calls.some((c) => c.method === "DELETE")).toBe(false);
+    await ctx.execute(remove);
+    await ctx.execute(del);
+    expect(ctx.calls.filter((c) => c.method === "DELETE").map((c) => c.path)).toEqual(["/api/v1/watchlists/w1/items", "/api/v1/watchlists/w1"]);
+    await ctx.close();
+  });
+
+  it("enforces the per-minute write limit when the user executes; a blocked action stays pending", async () => {
     const limited = baseCfg({ enableWrite: true, maxWritesPerMinute: 1 });
-    const { client, calls, close } = await connect(limited, orderHandler(), "accept");
-    for (let i = 0; i < 2; i++) {
-      const prep = JSON.parse(textOf(await client.callTool({ name: "etoro_prepare_open_position", arguments: openArgs })));
-      const res = await client.callTool({ name: "etoro_confirm_action", arguments: { confirmationId: prep.confirmationId } });
-      expect(Boolean(res.isError)).toBe(i === 1);
-    }
-    expect(orderCalls(calls)).toHaveLength(1);
-    await close();
+    const ctx = await connect(limited, orderHandler());
+    const first = await ctx.prepare("etoro_prepare_open_position", openArgs);
+    const second = await ctx.prepare("etoro_prepare_open_position", openArgs);
+    await ctx.execute(first);
+    const blocked = await ctx.execute(second);
+    expect(blocked.status).toBe(200);
+    expect(blocked.text).toContain("Write rate limit reached");
+    expect(orderCalls(ctx.calls)).toHaveLength(1);
+    expect(await ctx.status(second)).toMatchObject({ status: "pending" });
+    await ctx.close();
+  });
+
+  it("a failed order is reported on the page and by the status tool, without keys", async () => {
+    const handler = orderHandler((call) =>
+      call.method === "POST" && call.path.endsWith("/orders") ? { status: 400, json: { title: "Bad", detail: `no ${API_KEY}` } } : undefined,
+    );
+    const ctx = await connect(cfg, handler);
+    const prep = await ctx.prepare("etoro_prepare_open_position", openArgs);
+    await ctx.execute(prep);
+    const status = await ctx.status(prep);
+    expect(status.status).toBe("failed");
+    expect(JSON.stringify(status)).not.toContain(API_KEY);
+    expect(await (await fetch(prep.approval.url!)).text()).toContain("Failed");
+    await ctx.close();
   });
 });
 
@@ -349,8 +392,8 @@ describe("read tools", () => {
 });
 
 describe("etoro_check_connection", () => {
-  const check = async (cfg = baseCfg(), handler: Handler = orderHandler(), elicit: "accept" | "none" = "accept") => {
-    const ctx = await connect(cfg, handler, elicit);
+  const check = async (cfg = baseCfg(), handler: Handler = orderHandler()) => {
+    const ctx = await connect(cfg, handler);
     const res = await ctx.client.callTool({ name: "etoro_check_connection", arguments: {} });
     return { ...ctx, res, out: JSON.parse(textOf(res)) };
   };
@@ -367,7 +410,6 @@ describe("etoro_check_connection", () => {
     expect(out.advice.join(" ")).toContain("IP address");
     expect(out.account).toEqual({ username: "tester", gcid: "***111", demoCid: "***001", realCid: "***001" });
     expect(textOf(res)).not.toContain("9000111");
-    expect(out.client.supportsConfirmationPrompts).toBe(true);
     expect(calls.every((c) => c.method === "GET")).toBe(true);
     await close();
   });

@@ -1,6 +1,5 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Config } from "../src/config.js";
 import { createServer } from "../src/server.js";
 
@@ -16,11 +15,12 @@ export function baseCfg(over: Partial<Config> = {}): Config {
     enableWrite: false,
     allowRealWrite: false,
     allowTransfers: false,
-    requireElicitation: false,
+    openBrowser: true,
+    showApprovalUrl: true,
     maxOrderUsd: 100,
     maxSessionUsd: 500,
     maxWritesPerMinute: 5,
-    confirmTtlMs: 300_000,
+    confirmTtlMs: 600_000,
     requestTimeoutMs: 30_000,
     strictKeyScope: false,
     maxResponseChars: 120_000,
@@ -126,27 +126,74 @@ export function orderHandler(extra?: Handler): Handler {
   };
 }
 
-export type ElicitMode = "accept" | "decline" | "none";
+export interface PageResult {
+  status: number;
+  text: string;
+  /** Where a redirect points (the approval page answers a successful POST with 303). */
+  location: string | null;
+}
 
-export async function connect(cfg: Config, handler: Handler, elicit: ElicitMode = "none") {
+/** Plays the user's browser: opens the approval page, then presses one of its buttons the way a form post would. */
+export async function pressButton(
+  url: string,
+  action: "execute" | "reject",
+  over: { origin?: string | null; csrf?: string; host?: string } = {},
+): Promise<PageResult> {
+  const page = await (await fetch(url)).text();
+  const csrf = over.csrf ?? /name="csrf" value="([^"]+)"/.exec(page)?.[1] ?? "";
+  const headers: Record<string, string> = { "content-type": "application/x-www-form-urlencoded" };
+  const origin = over.origin === undefined ? new URL(url).origin : over.origin;
+  if (origin !== null) headers.origin = origin;
+  const res = await fetch(`${url}/${action}`, { method: "POST", headers, body: `csrf=${encodeURIComponent(csrf)}`, redirect: "manual" });
+  return { status: res.status, text: await res.text(), location: res.headers.get("location") };
+}
+
+/** The tool result of an etoro_prepare_* call, parsed. */
+export interface Prepared {
+  actionId: string;
+  approval: { status: string; pageOpened: boolean; url?: string };
+  [key: string]: unknown;
+}
+
+export async function connect(cfg: Config, handler: Handler, opts: { openUrl?: (url: string) => Promise<boolean> } = {}) {
   const { fn, calls } = mockFetch(handler);
   const auditLines: string[] = [];
-  const { mcp } = createServer(cfg, { fetchFn: fn, sleep: async () => {}, audit: (e) => auditLines.push(JSON.stringify(e)) });
+  const opened: string[] = [];
+  const { mcp, ctx } = createServer(cfg, {
+    fetchFn: fn,
+    sleep: async () => {},
+    audit: (e) => auditLines.push(JSON.stringify(e)),
+    log: () => {},
+    openUrl: opts.openUrl ?? (async (url) => (opened.push(url), true)),
+  });
 
-  const client = new Client(
-    { name: "test-client", version: "0.0.0" },
-    { capabilities: elicit === "none" ? {} : { elicitation: {} } },
-  );
-  const prompts: string[] = [];
-  if (elicit !== "none") {
-    client.setRequestHandler(ElicitRequestSchema, async (req) => {
-      prompts.push(req.params.message);
-      return elicit === "accept" ? { action: "accept", content: { confirm: true } } : { action: "decline" };
-    });
-  }
+  const client = new Client({ name: "test-client", version: "0.0.0" }, { capabilities: {} });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([client.connect(clientTransport), mcp.connect(serverTransport)]);
-  return { client, calls, auditLines, prompts, close: () => client.close() };
+
+  const prepare = async (name: string, args: Record<string, unknown>): Promise<Prepared> => {
+    const res = await client.callTool({ name, arguments: args });
+    const text = textOf(res);
+    if (res.isError) throw new Error(`${name} failed: ${text}`);
+    return JSON.parse(text) as Prepared;
+  };
+  return {
+    client,
+    calls,
+    auditLines,
+    opened,
+    store: ctx.store,
+    /** Calls an etoro_prepare_* tool and returns the parsed result (throws if it is an error). */
+    prepare,
+    /** The user presses Execute / Reject on the approval page of a prepared action. */
+    execute: (p: Prepared) => pressButton(p.approval.url!, "execute"),
+    reject: (p: Prepared) => pressButton(p.approval.url!, "reject"),
+    status: async (p: Prepared) => JSON.parse(textOf(await client.callTool({ name: "etoro_get_action_status", arguments: { actionId: p.actionId } }))),
+    close: async () => {
+      await client.close();
+      await ctx.tickets.close();
+    },
+  };
 }
 
 export function textOf(result: unknown): string {

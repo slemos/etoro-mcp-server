@@ -1,11 +1,11 @@
 import { z } from "zod";
+import type { Proposal, ProposalRow } from "../approval/proposals.js";
 import { transfersEnabled } from "../config.js";
 import { R } from "../endpoints.js";
-import { type Instrument, asRecord, toInstrument } from "../instruments.js";
+import { type Instrument, asRecord, lookupInstruments, toInstrument } from "../instruments.js";
 import { InputError, PolicyError } from "../errors.js";
-import { askHuman } from "../safety.js";
 import { offeredSettlements } from "../settlement.js";
-import { type ToolContext, WRITE, extractList, fail, guarded, ok, explain } from "./common.js";
+import { type ToolContext, WRITE, extractList, guarded, ok, explain } from "./common.js";
 
 const id = z.number().int().positive();
 
@@ -39,8 +39,43 @@ async function bestEffort<T>(label: string, warnings: string[], fn: () => Promis
 
 const usd = (n: number): string => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+/** "markup: 0 USD; marketSpread: 0.02 USD" from eToro's what-if cost answer, or undefined when it has another shape. */
+function costsLine(costs: unknown): string | undefined {
+  const list = asRecord(costs).costs;
+  if (!Array.isArray(list) || list.length === 0) return undefined;
+  return list
+    .map((c) => {
+      const r = asRecord(c);
+      return `${String(r.costType ?? "cost")}: ${String(r.value ?? r.amount ?? "?")} ${String(r.currency ?? "")}`.trim();
+    })
+    .join("; ");
+}
+
+const APPROVAL_NOTE =
+  "Previewed only: nothing has been sent to eToro. You cannot execute this action: the user must press Execute on the approval page " +
+  "(opened in their browser when possible). Follow the outcome with etoro_get_action_status.";
+
+/** Registers the approval page for a proposal, opens it, and builds the part of the tool result every prepare tool shares. */
+async function announce(ctx: ToolContext, proposal: Proposal): Promise<Record<string, unknown>> {
+  const pageOpened = await ctx.tickets.open(proposal, ctx.cfg.openBrowser);
+  const url = ctx.cfg.showApprovalUrl ? await ctx.tickets.urlFor(proposal) : undefined;
+  const reachable = pageOpened || url !== undefined;
+  return {
+    actionId: proposal.id,
+    expiresAt: new Date(proposal.expiresAt).toISOString(),
+    environment: proposal.env,
+    summary: proposal.summary,
+    approval: { status: "awaiting_user", pageOpened, ...(url ? { url } : {}) },
+    note: reachable
+      ? APPROVAL_NOTE
+      : `${APPROVAL_NOTE} The page could not be opened automatically: its address is in the server's log (stderr). ETORO_SHOW_APPROVAL_URL=true puts it in this result, which also lets the model see it.`,
+  };
+}
+
+const row = (label: string, value: string): ProposalRow => ({ label, value });
+
 export function registerWriteTools(ctx: ToolContext): void {
-  const { mcp, cfg, client, pending, audit, guard } = ctx;
+  const { mcp, cfg, client, store, guard } = ctx;
   const env = cfg.env;
   const envLabel = env.toUpperCase();
 
@@ -52,7 +87,7 @@ export function registerWriteTools(ctx: ToolContext): void {
       description:
         `Validates and previews an order to open a position in the ${envLabel} account: resolves the instrument, checks eligibility, estimates costs and ` +
         `checks the per-order cap (ETORO_MAX_ORDER_USD = ${cfg.maxOrderUsd} USD of exposure, i.e. amount x leverage). ` +
-        "Sends nothing to eToro: it returns a confirmationId that etoro_confirm_action executes. " +
+        "Sends nothing to eToro: it registers the action and opens an approval page where the user, and only the user, can execute it; it returns an actionId. " +
         "settlementType 'real' buys the actual asset, 'cfd' opens a contract for difference; the preview rejects a type the account is not offered for that instrument " +
         "(some jurisdictions only get CFDs). Some stocks have a separate regular-hours instrument (symbol ending in .RTH) next to the 24/5 one: pass the exact symbol or instrumentId. Leverage above 1, short selling and trailing stops require stopLossRate. " +
         "Order reference: https://api-portal.etoro.com/core/guides/market-orders.md.",
@@ -175,34 +210,47 @@ export function registerWriteTools(ctx: ToolContext): void {
       if (a.limitRate !== undefined) body.limitRate = a.limitRate;
 
       const size = a.amountUsd !== undefined ? `${usd(a.amountUsd)}` : `${a.units} units (~${usd(cash)})`;
+      const settlementText = a.settlementType ?? (onlyOffered ? `${onlyOffered} (the only one offered)` : "default settlement");
       const summary =
         `OPEN ${a.side === "buy" ? "BUY" : "SHORT"} ${instrument.symbol} (id ${instrument.instrumentId}${instrument.displayName ? `, ${instrument.displayName}` : ""}) ` +
-        `| ${size} | ${a.leverage}x | ${a.settlementType ?? (onlyOffered ? `${onlyOffered} (the only one offered)` : "default settlement")} | ${a.orderType} order` +
+        `| ${size} | ${a.leverage}x | ${settlementText} | ${a.orderType} order` +
         `${a.stopLossRate !== undefined ? ` | stop loss ${a.stopLossRate} (${a.stopLossType})` : " | no stop loss"}` +
         `${a.takeProfitRate !== undefined ? ` | take profit ${a.takeProfitRate}` : ""}` +
         ` | environment ${envLabel}`;
+      const rows = [
+        row("Action", a.side === "buy" ? "Buy (open a long position)" : "Sell short (open a short position)"),
+        row("Instrument", `${instrument.symbol} (id ${instrument.instrumentId})${instrument.displayName ? `, ${instrument.displayName}` : ""}`),
+        row("Size", size),
+        row("Leverage", `${a.leverage}x`),
+        row("Settlement", settlementText),
+        row("Order type", a.orderType),
+        ...(a.triggerRate !== undefined ? [row("Trigger rate", String(a.triggerRate))] : []),
+        ...(a.limitRate !== undefined ? [row("Limit rate", String(a.limitRate))] : []),
+        row("Stop loss", a.stopLossRate !== undefined ? `${a.stopLossRate} (${a.stopLossType})` : "none"),
+        row("Take profit", a.takeProfitRate !== undefined ? String(a.takeProfitRate) : "none"),
+        row("Exposure", `${usd(exposure)} (amount x leverage)`),
+        ...(Number.isFinite(ask) ? [row("Ask price", String(rate.ask))] : []),
+        ...(costsLine(costs) ? [row("Estimated costs", costsLine(costs)!)] : []),
+      ];
 
-      const action = pending.create({
+      const proposal = store.create({
         tool: "open_position",
         summary,
+        rows,
+        warnings,
         exposureUsd: exposure,
-        run: (requestId) => client.call(R.createOrder(env), { body, requestId }),
+        run: ({ requestId, grant }) => client.call(R.createOrder(env), { body, requestId, grant }),
       });
-      audit({ event: "prepared", tool: action.tool, confirmationId: action.id, summary, exposureUsd: exposure });
 
       return ok({
-        confirmationId: action.id,
-        expiresAt: new Date(action.expiresAt).toISOString(),
-        environment: env,
-        summary,
+        ...(await announce(ctx, proposal)),
         instrument,
         estimatedExposureUsd: Number(exposure.toFixed(2)),
-        settlement: { requested: a.settlementType ?? null, offered: offered.known ? offered.settlements : null },
         marketRate: Number.isFinite(ask) ? { bid: rate.bid, ask: rate.ask } : null,
+        settlement: { requested: a.settlementType ?? null, offered: offered.known ? offered.settlements : null },
         eligibility,
         estimatedCosts: costs,
         warnings,
-        status: "Previewed only. Nothing has been sent to eToro until etoro_confirm_action is called with this confirmationId.",
       });
     }),
   );
@@ -214,7 +262,7 @@ export function registerWriteTools(ctx: ToolContext): void {
       title: "Preview closing an eToro position",
       description:
         `Previews closing all or part of an open position in the ${envLabel} account. Get positionId and instrumentId from etoro_get_portfolio_breakdown. ` +
-        "Omit unitsToDeduct to close the whole position. Sends nothing to eToro: it returns a confirmationId that etoro_confirm_action executes.",
+        "Omit unitsToDeduct to close the whole position. Sends nothing to eToro: it registers the action and opens an approval page where the user, and only the user, can execute it; it returns an actionId.",
       inputSchema: {
         positionId: id,
         instrumentId: id,
@@ -240,23 +288,27 @@ export function registerWriteTools(ctx: ToolContext): void {
         [env === "demo" ? "InstrumentID" : "InstrumentId"]: instrumentId,
         UnitsToDeduct: unitsToDeduct ?? null,
       };
-      const action = pending.create({
+      const open = asRecord(matched);
+      const rows = [
+        row("Action", "Close a position"),
+        row("Position id", String(positionId)),
+        row("Instrument id", String(instrumentId)),
+        row("Close", unitsToDeduct === undefined ? "The entire position" : `${unitsToDeduct} units`),
+        ...(matched
+          ? [
+              row("Open position", `${String(open.units ?? "?")} units, opened at ${String(open.openRate ?? "?")}, amount ${String(open.amount ?? "?")}, leverage ${String(open.leverage ?? "?")}x`),
+            ]
+          : []),
+      ];
+      const proposal = store.create({
         tool: "close_position",
         summary,
-        exposureUsd: 0,
-        run: (requestId) => client.call(R.closePosition(env, positionId), { body, requestId }),
-      });
-      audit({ event: "prepared", tool: action.tool, confirmationId: action.id, summary });
-
-      return ok({
-        confirmationId: action.id,
-        expiresAt: new Date(action.expiresAt).toISOString(),
-        environment: env,
-        summary,
-        matchedPosition: matched ?? null,
+        rows,
         warnings,
-        status: "Previewed only. Nothing has been sent to eToro until etoro_confirm_action is called with this confirmationId.",
+        exposureUsd: 0,
+        run: ({ requestId, grant }) => client.call(R.closePosition(env, positionId), { body, requestId, grant }),
       });
+      return ok({ ...(await announce(ctx, proposal)), matchedPosition: matched ?? null, warnings });
     }),
   );
 
@@ -266,7 +318,7 @@ export function registerWriteTools(ctx: ToolContext): void {
     {
       title: "Preview cancelling an eToro order",
       description:
-        `Previews cancelling a pending (not yet executed) order in the ${envLabel} account. Sends nothing to eToro: it returns a confirmationId that etoro_confirm_action executes.`,
+        `Previews cancelling a pending (not yet executed) order in the ${envLabel} account. Sends nothing to eToro: it registers the action and opens an approval page where the user, and only the user, can execute it; it returns an actionId.`,
       inputSchema: { orderId: id },
       annotations: WRITE("Preview cancelling an eToro order", { destructive: false, idempotent: true }),
     },
@@ -275,22 +327,16 @@ export function registerWriteTools(ctx: ToolContext): void {
       const warnings: string[] = [];
       const order = await bestEffort("Order lookup", warnings, () => client.call(R.orderLookup(env), { query: { orderId } }));
       const summary = `CANCEL order ${orderId} | environment ${envLabel}`;
-      const action = pending.create({
+      const status = asRecord(asRecord(order).status);
+      const proposal = store.create({
         tool: "cancel_order",
         summary,
-        exposureUsd: 0,
-        run: (requestId) => client.call(R.cancelOrder(env, orderId), { requestId }),
-      });
-      audit({ event: "prepared", tool: action.tool, confirmationId: action.id, summary });
-      return ok({
-        confirmationId: action.id,
-        expiresAt: new Date(action.expiresAt).toISOString(),
-        environment: env,
-        summary,
-        order: order ?? null,
+        rows: [row("Action", "Cancel a pending order"), row("Order id", String(orderId)), ...(status.name ? [row("Current status", String(status.name))] : [])],
         warnings,
-        status: "Previewed only. Nothing has been sent to eToro until etoro_confirm_action is called with this confirmationId.",
+        exposureUsd: 0,
+        run: ({ requestId, grant }) => client.call(R.cancelOrder(env, orderId), { requestId, grant }),
       });
+      return ok({ ...(await announce(ctx, proposal)), order: order ?? null, warnings });
     }),
   );
 
@@ -304,7 +350,7 @@ export function registerWriteTools(ctx: ToolContext): void {
         title: "Preview an internal eToro transfer",
         description:
           "Previews moving funds between the user's own eToro accounts (for example cash to trading). It is a real money movement: the amount is limited by ETORO_MAX_ORDER_USD. " +
-          "Sends nothing to eToro: it returns a confirmationId that etoro_confirm_action executes. Reference: https://api-portal.etoro.com/api-reference/transfer/execute-an-internal-account-to-account-transfer.md.",
+          "Sends nothing to eToro: it registers the action and opens an approval page where the user, and only the user, can execute it; it returns an actionId. Reference: https://api-portal.etoro.com/api-reference/transfer/execute-an-internal-account-to-account-transfer.md.",
         inputSchema: {
           sourceAccountType: accountType,
           sourceAccountId: accountId,
@@ -323,13 +369,20 @@ export function registerWriteTools(ctx: ToolContext): void {
         const summary =
           `TRANSFER ${usd(t.amount)}${t.currency ? ` ${t.currency}` : ""} from ${t.sourceAccountType} #${t.sourceAccountId} ` +
           `to ${t.destinationAccountType} #${t.destinationAccountId} | environment ${envLabel}`;
-        const action = pending.create({
+        const proposal = store.create({
           tool: "transfer",
           summary,
+          rows: [
+            row("Action", "Move funds between your own eToro accounts"),
+            row("From", `${t.sourceAccountType} #${t.sourceAccountId}`),
+            row("To", `${t.destinationAccountType} #${t.destinationAccountId}`),
+            row("Amount", `${usd(t.amount)}${t.currency ? ` ${t.currency}` : ""}`),
+          ],
           exposureUsd: t.amount,
-          run: (requestId) =>
+          run: ({ requestId, grant }) =>
             client.call(R.transfer(), {
               requestId,
+              grant,
               body: {
                 requestReferenceId: requestId,
                 sourceAccount: { accountType: t.sourceAccountType, accountId: t.sourceAccountId },
@@ -339,134 +392,104 @@ export function registerWriteTools(ctx: ToolContext): void {
               },
             }),
         });
-        audit({ event: "prepared", tool: action.tool, confirmationId: action.id, summary, exposureUsd: t.amount });
-        return ok({
-          confirmationId: action.id,
-          expiresAt: new Date(action.expiresAt).toISOString(),
-          environment: env,
-          summary,
-          status: "Previewed only. Nothing has been sent to eToro until etoro_confirm_action is called with this confirmationId.",
-        });
+        return ok(await announce(ctx, proposal));
       }),
     );
   }
 
-  // --------------------------------------------------------------- confirm
-  mcp.registerTool(
-    "etoro_confirm_action",
-    {
-      title: "Execute a previewed eToro action",
-      description:
-        "Executes an order, close, cancel or transfer previously previewed by an etoro_prepare_* tool, identified by its confirmationId. " +
-        "Each confirmationId works once and expires (default 5 minutes). When the client supports it, the user is asked directly to approve the exact action. " +
-        "eToro replies that the request was accepted for processing; use etoro_get_order to follow an order's status.",
-      inputSchema: { confirmationId: z.string().uuid() },
-      annotations: WRITE("Execute a previewed eToro action", { destructive: true, idempotent: false }),
-    },
-    guarded(async ({ confirmationId }) => {
-      const action = pending.get(confirmationId);
-      if (!action) return fail("Unknown or expired confirmationId. Run the etoro_prepare_* tool again.");
-      if (action.executed) return ok(action.result, "This action was already executed; returning the original result.");
-
-      pending.assertWithinLimits(action);
-
-      const decision = await askHuman(mcp, `Confirm eToro ${envLabel} action:\n\n${action.summary}`);
-      if (decision === "declined") {
-        audit({ event: "declined", tool: action.tool, confirmationId });
-        return fail("The user declined the action. Nothing was sent to eToro.");
-      }
-      if (decision === "unavailable" && cfg.requireElicitation) {
-        audit({ event: "blocked_no_elicitation", tool: action.tool, confirmationId });
-        return fail(
-          "Human confirmation is required (ETORO_REQUIRE_ELICITATION) but this client cannot show a confirmation prompt, so nothing was sent. " +
-            "Use a client with MCP elicitation support (for example Claude Code 2.1.76 or newer), or set ETORO_REQUIRE_ELICITATION=false " +
-            "if you accept confirming through the conversation alone.",
-        );
-      }
-
-      try {
-        const result = await action.run(action.requestId);
-        action.executed = true;
-        action.result = result;
-        pending.recordExecution(action);
-        audit({ event: "executed", tool: action.tool, confirmationId, summary: action.summary, askedHuman: decision === "accepted" });
-        return ok(result, `Executed on eToro (${env}): ${action.summary}`);
-      } catch (err) {
-        audit({ event: "failed", tool: action.tool, confirmationId, error: explain(err).split("\n")[0] });
-        throw err;
-      }
-    }),
-  );
-
   // ------------------------------------------------------------- watchlists
+  // No money moves, but they change the account, so they follow the same rule: Claude proposes, the user executes.
+  const names = async (instrumentIds: number[]): Promise<string> => {
+    const found = await lookupInstruments(client, instrumentIds);
+    return instrumentIds.map((n) => (found.get(n) ? `${found.get(n)!.symbol} (id ${n})` : `id ${n}`)).join(", ");
+  };
+
   mcp.registerTool(
-    "etoro_create_watchlist",
+    "etoro_prepare_create_watchlist",
     {
-      title: "Create an eToro watchlist",
-      description: "Creates a new watchlist (no money involved). Returns the new watchlist with its id.",
+      title: "Preview creating an eToro watchlist",
+      description:
+        "Previews creating a watchlist (no money involved). Sends nothing to eToro: it registers the action and opens an approval page where the user, and only the user, can execute it; it returns an actionId.",
       inputSchema: {
         name: z.string().min(1).max(100),
         type: z.enum(["Static", "Dynamic"]).default("Static"),
       },
-      annotations: WRITE("Create an eToro watchlist", { destructive: false, idempotent: false }),
+      annotations: WRITE("Preview creating an eToro watchlist", { destructive: false, idempotent: true }),
     },
     guarded(async ({ name, type }) => {
-      const result = await client.call(R.createWatchlist(), { query: { name, type } });
-      audit({ event: "executed", tool: "create_watchlist", name });
-      return ok(result);
+      const proposal = store.create({
+        tool: "create_watchlist",
+        summary: `CREATE watchlist "${name}" (${type}) | environment ${envLabel}`,
+        rows: [row("Action", "Create a watchlist"), row("Name", name), row("Type", type)],
+        exposureUsd: 0,
+        run: ({ requestId, grant }) => client.call(R.createWatchlist(), { query: { name, type }, requestId, grant }),
+      });
+      return ok(await announce(ctx, proposal));
     }),
   );
 
   mcp.registerTool(
-    "etoro_add_watchlist_items",
+    "etoro_prepare_add_watchlist_items",
     {
-      title: "Add instruments to an eToro watchlist",
-      description: "Adds instruments (by instrument id) to an existing watchlist. Get watchlist ids from etoro_list_watchlists.",
+      title: "Preview adding instruments to an eToro watchlist",
+      description:
+        "Previews adding instruments (by instrument id) to an existing watchlist. Get watchlist ids from etoro_list_watchlists. Sends nothing to eToro: it registers the action and opens an approval page where the user, and only the user, can execute it; it returns an actionId.",
       inputSchema: { watchlistId: z.string().min(1).max(64), instrumentIds: z.array(id).min(1).max(100) },
-      annotations: WRITE("Add instruments to an eToro watchlist", { destructive: false, idempotent: true }),
+      annotations: WRITE("Preview adding instruments to an eToro watchlist", { destructive: false, idempotent: true }),
     },
     guarded(async ({ watchlistId, instrumentIds }) => {
       const body = instrumentIds.map((itemId) => ({ itemId, itemType: "Instrument" }));
-      const result = await client.call(R.addWatchlistItems(watchlistId), { body });
-      audit({ event: "executed", tool: "add_watchlist_items", watchlistId, count: instrumentIds.length });
-      return ok(result);
+      const proposal = store.create({
+        tool: "add_watchlist_items",
+        summary: `ADD ${instrumentIds.length} instrument(s) to watchlist ${watchlistId} | environment ${envLabel}`,
+        rows: [row("Action", "Add instruments to a watchlist"), row("Watchlist id", watchlistId), row("Instruments", await names(instrumentIds))],
+        exposureUsd: 0,
+        run: ({ requestId, grant }) => client.call(R.addWatchlistItems(watchlistId), { body, requestId, grant }),
+      });
+      return ok(await announce(ctx, proposal));
     }),
   );
 
   mcp.registerTool(
-    "etoro_remove_watchlist_items",
+    "etoro_prepare_remove_watchlist_items",
     {
-      title: "Remove instruments from an eToro watchlist",
-      description: "Removes instruments (by instrument id) from a watchlist. The user is asked to approve when the client supports it.",
+      title: "Preview removing instruments from an eToro watchlist",
+      description:
+        "Previews removing instruments (by instrument id) from a watchlist. Sends nothing to eToro: it registers the action and opens an approval page where the user, and only the user, can execute it; it returns an actionId.",
       inputSchema: { watchlistId: z.string().min(1).max(64), instrumentIds: z.array(id).min(1).max(100) },
-      annotations: WRITE("Remove instruments from an eToro watchlist", { destructive: true, idempotent: true }),
+      annotations: WRITE("Preview removing instruments from an eToro watchlist", { destructive: false, idempotent: true }),
     },
     guarded(async ({ watchlistId, instrumentIds }) => {
-      if ((await askHuman(mcp, `Remove ${instrumentIds.length} instrument(s) from watchlist ${watchlistId}?`)) === "declined") {
-        return fail("The user declined. Nothing was changed.");
-      }
       const body = instrumentIds.map((itemId) => ({ itemId, itemType: "Instrument" }));
-      const result = await client.call(R.removeWatchlistItems(watchlistId), { body });
-      audit({ event: "executed", tool: "remove_watchlist_items", watchlistId, count: instrumentIds.length });
-      return ok(result);
+      const proposal = store.create({
+        tool: "remove_watchlist_items",
+        summary: `REMOVE ${instrumentIds.length} instrument(s) from watchlist ${watchlistId} | environment ${envLabel}`,
+        rows: [row("Action", "Remove instruments from a watchlist"), row("Watchlist id", watchlistId), row("Instruments", await names(instrumentIds))],
+        exposureUsd: 0,
+        run: ({ requestId, grant }) => client.call(R.removeWatchlistItems(watchlistId), { body, requestId, grant }),
+      });
+      return ok(await announce(ctx, proposal));
     }),
   );
 
   mcp.registerTool(
-    "etoro_delete_watchlist",
+    "etoro_prepare_delete_watchlist",
     {
-      title: "Delete an eToro watchlist",
-      description: "Deletes a watchlist and its items (no money involved, but not reversible). The user is asked to approve when the client supports it.",
+      title: "Preview deleting an eToro watchlist",
+      description:
+        "Previews deleting a watchlist and its items (no money involved, but not reversible). Sends nothing to eToro: it registers the action and opens an approval page where the user, and only the user, can execute it; it returns an actionId.",
       inputSchema: { watchlistId: z.string().min(1).max(64) },
-      annotations: WRITE("Delete an eToro watchlist", { destructive: true, idempotent: true }),
+      annotations: WRITE("Preview deleting an eToro watchlist", { destructive: false, idempotent: true }),
     },
     guarded(async ({ watchlistId }) => {
-      if ((await askHuman(mcp, `Delete watchlist ${watchlistId}? This cannot be undone.`)) === "declined") {
-        return fail("The user declined. Nothing was changed.");
-      }
-      const result = await client.call(R.deleteWatchlist(watchlistId));
-      audit({ event: "executed", tool: "delete_watchlist", watchlistId });
-      return ok(result);
+      const proposal = store.create({
+        tool: "delete_watchlist",
+        summary: `DELETE watchlist ${watchlistId} | environment ${envLabel}`,
+        rows: [row("Action", "Delete a watchlist and its items (cannot be undone)"), row("Watchlist id", watchlistId)],
+        exposureUsd: 0,
+        run: ({ requestId, grant }) => client.call(R.deleteWatchlist(watchlistId), { requestId, grant }),
+      });
+      return ok(await announce(ctx, proposal));
     }),
   );
 }

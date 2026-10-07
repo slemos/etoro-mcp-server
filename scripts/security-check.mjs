@@ -12,6 +12,7 @@
  * rewrite the request path; and that secrets never reach tool results, stderr or the audit log.
  */
 import { spawn } from "node:child_process";
+import { request } from "node:http";
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -29,11 +30,10 @@ const WRITE_TOOLS = [
   "etoro_prepare_open_position",
   "etoro_prepare_close_position",
   "etoro_prepare_cancel_order",
-  "etoro_confirm_action",
-  "etoro_create_watchlist",
-  "etoro_add_watchlist_items",
-  "etoro_remove_watchlist_items",
-  "etoro_delete_watchlist",
+  "etoro_prepare_create_watchlist",
+  "etoro_prepare_add_watchlist_items",
+  "etoro_prepare_remove_watchlist_items",
+  "etoro_prepare_delete_watchlist",
 ];
 
 const results = [];
@@ -42,12 +42,36 @@ function check(name, ok, detail = "") {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok || !detail ? "" : `\n      ${detail}`}`);
 }
 
+/** Plays the user's browser on an approval page: reads the form, then posts it (or a tampered version). */
+async function pressOnPage(url, action = "execute", over = {}) {
+  const page = await (await fetch(url)).text();
+  const csrf = over.csrf ?? /name="csrf" value="([^"]+)"/.exec(page)?.[1] ?? "";
+  const headers = { "content-type": "application/x-www-form-urlencoded" };
+  const origin = over.origin === undefined ? new URL(url).origin : over.origin;
+  if (origin !== null) headers.origin = origin;
+  const res = await fetch(`${url}/${action}`, { method: "POST", headers, body: `csrf=${encodeURIComponent(csrf)}`, redirect: "manual" });
+  return res.status;
+}
+
+/** Calls a prepare tool and returns { actionId, url, text }; url is only present when ETORO_SHOW_APPROVAL_URL is on. */
+async function prepare(client, name, args) {
+  const res = await call(client, name, args);
+  let parsed = {};
+  try {
+    parsed = JSON.parse(res.text);
+  } catch {
+    // an error text
+  }
+  return { refused: res.refused, text: res.text, actionId: parsed.actionId, url: parsed.approval?.url };
+}
+
 const baseEnv = (extra = {}) => ({
   PATH: process.env.PATH,
   HOME: work,
   ETORO_API_KEY: API_KEY,
   ETORO_USER_KEY: USER_KEY,
   NODE_OPTIONS: `--import ${preload}`,
+  ETORO_OPEN_BROWSER: "false", // never pop a browser window during the checks
   ...extra,
 });
 
@@ -119,10 +143,8 @@ async function main() {
   const demoWrite = await toolNames("demo-write", { ETORO_ENABLE_WRITE: "true" });
   check("demo + ETORO_ENABLE_WRITE: write tools exist", WRITE_TOOLS.every((t) => demoWrite.some((x) => x.name === t)));
   check("demo + ETORO_ENABLE_WRITE: no transfer tool", !demoWrite.some((t) => t.name === "etoro_prepare_transfer"));
-  check(
-    "destructive tools say so (confirm, remove, delete)",
-    ["etoro_confirm_action", "etoro_remove_watchlist_items", "etoro_delete_watchlist"].every((n) => demoWrite.find((t) => t.name === n)?.annotations?.destructiveHint === true),
-  );
+  check("no tool Claude can call executes an action: there is no etoro_confirm_action", !demoWrite.some((t) => /confirm|execute/.test(t.name)));
+  check("the only way to follow an action is a read-only status tool", demoWrite.find((t) => t.name === "etoro_get_action_status")?.annotations?.readOnlyHint === true);
 
   const realNoSecond = await toolNames("real-no-second-switch", { ETORO_ENV: "real", ETORO_ENABLE_WRITE: "true" });
   check("real + ETORO_ENABLE_WRITE without ETORO_ALLOW_REAL_WRITE: still read-only", WRITE_TOOLS.every((t) => !realNoSecond.some((x) => x.name === t)));
@@ -144,7 +166,7 @@ async function main() {
   }
 
   // 3. Hostile arguments are rejected before any request is made.
-  const s = await start("hostile", { ETORO_ENABLE_WRITE: "true", ETORO_AUDIT_LOG: join(work, "audit.jsonl") });
+  const s = await start("hostile", { ETORO_ENABLE_WRITE: "true", ETORO_SHOW_APPROVAL_URL: "true", ETORO_AUDIT_LOG: join(work, "audit.jsonl") });
   const tooMany = Array.from({ length: 101 }, (_, i) => i + 1);
   const hostile = [
     ["etoro_get_order", { orderId: -1 }],
@@ -163,10 +185,11 @@ async function main() {
     ["etoro_prepare_open_position", { symbol: "AAPL", side: "sellShort", amountUsd: 5 }],
     ["etoro_prepare_close_position", { positionId: "abc", instrumentId: 1 }],
     ["etoro_prepare_cancel_order", { orderId: 0 }],
-    ["etoro_confirm_action", { confirmationId: "not-a-uuid" }],
+    ["etoro_get_action_status", { actionId: "not-a-uuid" }],
+    ["etoro_get_action_status", { actionId: "00000000-0000-4000-8000-000000000000" }],
+    ["etoro_prepare_create_watchlist", { name: "" }],
+    ["etoro_prepare_add_watchlist_items", { watchlistId: "x", instrumentIds: [] }],
     ["etoro_confirm_action", { confirmationId: "00000000-0000-4000-8000-000000000000" }],
-    ["etoro_create_watchlist", { name: "" }],
-    ["etoro_add_watchlist_items", { watchlistId: "x", instrumentIds: [] }],
     ["etoro_does_not_exist", {}],
   ];
   let wronglyAccepted = [];
@@ -180,16 +203,21 @@ async function main() {
   const guardReads = new Set(["/api/v1/me", "/api/v1/trading/info/demo/aggregate-portfolio", "/api/v1/trading/info/aggregate-portfolio"]);
   const unexpected = s.fetches().filter((f) => f.method !== "GET" || !guardReads.has(f.path));
   check("...and none of them sent a write or any request besides the environment check", unexpected.length === 0, JSON.stringify(unexpected.slice(0, 3)));
-  const unknownConfirm = await call(s.client, "etoro_confirm_action", { confirmationId: "00000000-0000-4000-8000-000000000000" });
-  check("an unknown confirmationId executes nothing", unknownConfirm.refused && /Unknown or expired/.test(unknownConfirm.text), unknownConfirm.text);
+  const unknownStatus = await call(s.client, "etoro_get_action_status", { actionId: "00000000-0000-4000-8000-000000000000" });
+  check("an unknown actionId reports an error and executes nothing", unknownStatus.refused && /Unknown actionId/.test(unknownStatus.text), unknownStatus.text);
 
-  // 4. Identifiers cannot rewrite the request path, whatever they contain.
-  const before = s.fetches().length;
+  // 4. Identifiers cannot rewrite the request path, whatever they contain. Watchlist changes are proposals, so each one
+  //    is prepared and then executed on its approval page, exactly as a user would.
   const ids = ["..", ".", "../../orders", "a/b", "a?x=1", "a#frag", "%2e%2e", "x\u0000y", " ../ "];
+  const proposals = [];
   for (const watchlistId of ids) {
-    await call(s.client, "etoro_delete_watchlist", { watchlistId });
-    await call(s.client, "etoro_add_watchlist_items", { watchlistId, instrumentIds: [1] });
+    proposals.push(await prepare(s.client, "etoro_prepare_delete_watchlist", { watchlistId }));
+    proposals.push(await prepare(s.client, "etoro_prepare_add_watchlist_items", { watchlistId, instrumentIds: [1] }));
   }
+  const writesBeforeExecute = s.fetches().filter((f) => f.method !== "GET");
+  check(`${proposals.length} prepared watchlist changes sent nothing to eToro before the user pressed Execute`, proposals.every((p) => p.url) && writesBeforeExecute.length === 0, JSON.stringify(writesBeforeExecute.slice(0, 2)));
+  const before = s.fetches().length;
+  for (const p of proposals) if (p.url) await pressOnPage(p.url, "execute");
   const attempted = s.fetches().slice(before);
   const bad = attempted.filter((f) => {
     const rest = f.path.startsWith("/api/v1/watchlists/") ? f.path.slice("/api/v1/watchlists/".length) : null;
@@ -212,20 +240,67 @@ async function main() {
     ["etoro_get_balances", {}],
     ["etoro_get_portfolio", {}],
     ["etoro_check_connection", {}],
-    ["etoro_create_watchlist", { name: "x" }],
     ["etoro_prepare_open_position", { symbol: "AAPL", side: "buy", amountUsd: 5, settlementType: "cfd" }],
   ]) {
     const res = await call(s.client, name, args);
     if (res.text.includes(API_KEY) || res.text.includes(USER_KEY)) leaky.push(name);
   }
+  // The one write below is executed on its approval page; its failure carries the request headers (the tripwire error).
+  const secretProposal = await prepare(s.client, "etoro_prepare_create_watchlist", { name: "secrets" });
+  await pressOnPage(secretProposal.url, "execute");
+  const statusText = (await call(s.client, "etoro_get_action_status", { actionId: secretProposal.actionId })).text;
+  const pageText = await (await fetch(secretProposal.url)).text();
   const sent = s.fetches();
   check("positive control: the fake keys really were in the request headers", sent.some((f) => f.apiKey === API_KEY && f.userKey === USER_KEY));
-  check("tool results never contain the keys, even when the failing request's headers are in the error", leaky.length === 0, leaky.join(", "));
+  check(
+    "tool results, the action status and the approval page never contain the keys, even when the failing request's headers are in the error",
+    leaky.length === 0 && ![statusText, pageText].some((t) => t.includes(API_KEY) || t.includes(USER_KEY)),
+    leaky.join(", "),
+  );
   await s.close();
   check("stderr never contains the keys", !s.stderr().includes(API_KEY) && !s.stderr().includes(USER_KEY), s.stderr().slice(0, 300));
   const auditFile = join(work, "audit.jsonl");
   const audit = existsSync(auditFile) ? readFileSync(auditFile, "utf8") : "";
   check("the audit log never contains the keys", !audit.includes(API_KEY) && !audit.includes(USER_KEY));
+  check("the audit log records the user's Execute before each executed action", audit.includes("approved_by_user") && audit.includes('"event":"prepared"'));
+
+  // 6. The approval page: only the user, through the page, can make a write happen.
+  const g = await start("approval", { ETORO_ENABLE_WRITE: "true", ETORO_SHOW_APPROVAL_URL: "true" });
+  const evil = '<script>alert(1)</script>';
+  const prop = await prepare(g.client, "etoro_prepare_create_watchlist", { name: evil });
+  const page = await fetch(prop.url);
+  const html = await page.text();
+  check("the approval page is plain HTML: no script, the hostile name is escaped", page.status === 200 && !html.includes("<script") && html.includes("&lt;script&gt;"));
+  check("the approval page sends a CSP that forbids everything but inline styles", /default-src 'none'/.test(page.headers.get("content-security-policy") ?? "") && page.headers.get("cache-control") === "no-store");
+  const url = new URL(prop.url);
+  check("a wrong token is a 404", (await fetch(prop.url.replace(/\/t\/[^/]+/, `/t/${"A".repeat(43)}`))).status === 404);
+  const rebound = await new Promise((resolve) => {
+    const req = request({ host: "127.0.0.1", port: Number(url.port), path: url.pathname, headers: { host: `evil.example:${url.port}` } }, (res) => {
+      res.resume();
+      resolve(res.statusCode);
+    });
+    req.end();
+  });
+  check("a request carrying another Host (DNS rebinding) is refused", rebound === 403, `status ${rebound}`);
+  check("a POST without an Origin, with a foreign Origin or with a wrong anti-CSRF value is refused", (await pressOnPage(prop.url, "execute", { origin: null })) === 403 && (await pressOnPage(prop.url, "execute", { origin: "http://evil.example" })) === 403 && (await pressOnPage(prop.url, "execute", { csrf: "nope" })) === 403);
+  check("a GET on the execute address does not execute", (await fetch(`${prop.url}/execute`)).status === 405);
+  check("none of that sent a write to eToro", g.fetches().filter((f) => f.method !== "GET").length === 0, JSON.stringify(g.fetches().slice(0, 2)));
+  await pressOnPage(prop.url, "execute");
+  const writes = g.fetches().filter((f) => f.method !== "GET");
+  check("only the user's Execute press made the write happen, once", writes.length === 1 && writes[0].path === "/api/v1/watchlists", JSON.stringify(writes));
+  await pressOnPage(prop.url, "execute");
+  check("pressing Execute again sends nothing more", g.fetches().filter((f) => f.method !== "GET").length === 1);
+  await g.close();
+
+  const h = await start("hidden", { ETORO_ENABLE_WRITE: "true" });
+  const hiddenText = (await call(h.client, "etoro_prepare_create_watchlist", { name: "x" })).text;
+  await new Promise((resolve) => setTimeout(resolve, 300)); // let the server's log line arrive
+  check(
+    "by default the approval address is not given to Claude (only to the browser and the server log)",
+    !/127\.0\.0\.1|\/t\//.test(hiddenText) && /127\.0\.0\.1:\d+\/t\//.test(h.stderr()),
+    hiddenText.slice(0, 200),
+  );
+  await h.close();
 
   const failed = results.filter((r) => !r.ok);
   console.log(`\n${results.length - failed.length}/${results.length} security checks passed.`);

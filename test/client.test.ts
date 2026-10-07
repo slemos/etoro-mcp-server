@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ApprovalGrant } from "../src/approval/grant.js";
 import { EtoroClient } from "../src/client.js";
 import { R } from "../src/endpoints.js";
 import { EtoroApiError, PolicyError } from "../src/errors.js";
@@ -23,30 +24,30 @@ describe("EtoroClient", () => {
   it("blocks write routes (before any network call) when writes are disabled", async () => {
     const { fn, calls } = mockFetch(() => ({ json: {} }));
     const client = new EtoroClient(baseCfg(), fn, noSleep);
-    await expect(client.call(R.createOrder("demo"), { body: {} })).rejects.toBeInstanceOf(PolicyError);
-    await expect(client.call(R.cancelOrder("demo", 1))).rejects.toBeInstanceOf(PolicyError);
+    await expect(client.call(R.createOrder("demo"), { body: {}, grant: ApprovalGrant.mint() })).rejects.toBeInstanceOf(PolicyError);
+    await expect(client.call(R.cancelOrder("demo", 1), { grant: ApprovalGrant.mint() })).rejects.toBeInstanceOf(PolicyError);
     expect(calls).toHaveLength(0);
   });
 
   it("blocks real writes without the second switch, allows demo writes", async () => {
     const { fn, calls } = mockFetch(() => ({ json: {} }));
     const real = new EtoroClient(baseCfg({ env: "real", enableWrite: true }), fn, noSleep);
-    await expect(real.call(R.createOrder("real"), { body: {} })).rejects.toBeInstanceOf(PolicyError);
+    await expect(real.call(R.createOrder("real"), { body: {}, grant: ApprovalGrant.mint() })).rejects.toBeInstanceOf(PolicyError);
     const demo = new EtoroClient(baseCfg({ env: "demo", enableWrite: true }), fn, noSleep);
-    await demo.call(R.createOrder("demo"), { body: {} });
+    await demo.call(R.createOrder("demo"), { body: {}, grant: ApprovalGrant.mint() });
     expect(calls).toHaveLength(1);
   });
 
   it("blocks transfers unless explicitly allowed on real", async () => {
     const { fn, calls } = mockFetch(() => ({ json: { transferId: 1 } }));
     const client = new EtoroClient(baseCfg({ env: "real", enableWrite: true, allowRealWrite: true }), fn, noSleep);
-    await expect(client.call(R.transfer(), { body: {} })).rejects.toBeInstanceOf(PolicyError);
+    await expect(client.call(R.transfer(), { body: {}, grant: ApprovalGrant.mint() })).rejects.toBeInstanceOf(PolicyError);
     const allowed = new EtoroClient(
       baseCfg({ env: "real", enableWrite: true, allowRealWrite: true, allowTransfers: true }),
       fn,
       noSleep,
     );
-    await allowed.call(R.transfer(), { body: {} });
+    await allowed.call(R.transfer(), { body: {}, grant: ApprovalGrant.mint() });
     expect(calls).toHaveLength(1);
   });
 
@@ -55,13 +56,13 @@ describe("EtoroClient", () => {
     const client = new EtoroClient(baseCfg({ enableWrite: true }), fn, noSleep);
     for (const watchlistId of ["..", ".", "%2e%2e"]) {
       const safe = watchlistId === "%2e%2e";
-      const attempt = client.call(R.deleteWatchlist(watchlistId));
+      const attempt = client.call(R.deleteWatchlist(watchlistId), { grant: ApprovalGrant.mint() });
       if (safe) await attempt;
       else await expect(attempt).rejects.toBeInstanceOf(PolicyError);
     }
     // "%2e%2e" is encoded again ("%252e%252e"), so it stays one literal segment; "a/b" and "../x" are encoded too.
-    await client.call(R.addWatchlistItems("a/b"), { body: [] });
-    await client.call(R.addWatchlistItems("../x"), { body: [] });
+    await client.call(R.addWatchlistItems("a/b"), { body: [], grant: ApprovalGrant.mint() });
+    await client.call(R.addWatchlistItems("../x"), { body: [], grant: ApprovalGrant.mint() });
     expect(calls.map((c) => c.path)).toEqual([
       "/api/v1/watchlists/%252e%252e",
       "/api/v1/watchlists/a%2Fb/items",
@@ -81,7 +82,7 @@ describe("EtoroClient", () => {
     let n = 0;
     const { fn, calls } = mockFetch(() => (++n === 1 ? { status: 429, headers: { "retry-after": "1" } } : { json: { ok: true } }));
     const client = new EtoroClient(baseCfg({ enableWrite: true }), fn, noSleep);
-    const result = await client.call(R.createOrder("demo"), { body: {}, requestId: "11111111-1111-4111-8111-111111111111" });
+    const result = await client.call(R.createOrder("demo"), { body: {}, requestId: "11111111-1111-4111-8111-111111111111", grant: ApprovalGrant.mint() });
     expect(result).toEqual({ ok: true });
     expect(calls).toHaveLength(2);
     expect(calls[1]!.headers["x-request-id"]).toBe("11111111-1111-4111-8111-111111111111");

@@ -16,7 +16,7 @@ if [ "$version" != "$base" ]; then
   echo
 fi
 cat <<TEXT
-Unofficial [MCP](https://modelcontextprotocol.io) server for the eToro Public API: ask Claude about your portfolio and, if you opt in, place orders that you approve one by one. Read-only and demo by default. Not affiliated with eToro; not financial advice.
+Unofficial [MCP](https://modelcontextprotocol.io) server for the eToro Public API: ask Claude about your portfolio and, if you opt in, have orders prepared that you review and execute yourself on a local page. Read-only and demo by default. Not affiliated with eToro; not financial advice.
 
 ## What changed in $base
 
@@ -28,6 +28,7 @@ $section
 2. Double-click it, or drag it into **Settings → Extensions**. Claude Desktop shows a red warning that Anthropic has not verified the developer (see below).
 3. Paste your eToro API key and user key (a **Read** key on **Demo** is enough to start) and leave *Use the REAL environment* and *Enable write tools* off.
 4. Ask Claude: *"Check my eToro connection."*
+5. To try a write (only after turning on *Enable write tools*): ask Claude to prepare an order on demo. Your browser opens an approval page; you press Execute there, Claude cannot.
 
 Claude Code, other clients and key handling: see the [README](https://github.com/$repo#readme).
 

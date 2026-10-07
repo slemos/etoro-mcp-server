@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { type DemoCloseOptions, type DemoOrderOptions, parseCli, runDemoClose, runDemoOrder } from "../scripts/demo-order.mjs";
-import { type Handler, type RecordedCall, ME, baseCfg, connect, orderHandler, textOf } from "./helpers.js";
+import { type DemoCloseOptions, type DemoOrderOptions, parseCli, pressExecute, runDemoClose, runDemoOrder } from "../scripts/demo-order.mjs";
+import { type Handler, type RecordedCall, ME, baseCfg, connect, orderHandler, pressButton, textOf } from "./helpers.js";
 
 const cfg = baseCfg({ enableWrite: true });
 
@@ -28,7 +28,7 @@ const lifecycle = (opts: { executes?: boolean; status?: object } = {}): Handler 
 };
 
 async function run(handler: Handler, opts: Partial<DemoOrderOptions>, answers: boolean[] = [true, true]) {
-  const ctx = await connect(cfg, handler, "none");
+  const ctx = await connect(cfg, handler);
   const lines: string[] = [];
   const questions: string[] = [];
   const result = await runDemoOrder(
@@ -41,6 +41,7 @@ async function run(handler: Handler, opts: Partial<DemoOrderOptions>, answers: b
         questions.push(q);
         return answers.shift() ?? false;
       },
+      approve: async (url) => (await pressButton(url, "execute")).status,
       log: (l) => lines.push(l),
       sleep: async () => {},
     },
@@ -50,6 +51,49 @@ async function run(handler: Handler, opts: Partial<DemoOrderOptions>, answers: b
 }
 
 describe("demo order script flow", () => {
+  it("executes through the real approval page with the script's own Execute press", async () => {
+    const ctx = await connect(cfg, lifecycle());
+    const lines: string[] = [];
+    const result = await runDemoOrder(
+      {
+        call: async (name, args) => {
+          const res = await ctx.client.callTool({ name, arguments: args });
+          return { isError: Boolean(res.isError), text: textOf(res) };
+        },
+        confirm: async () => true,
+        approve: (url) => pressExecute(url),
+        log: (l) => lines.push(l),
+        sleep: async () => {},
+      },
+      { amountUsd: 50, pollMs: 0, symbol: "CSPX.L" },
+    );
+    expect(result).toMatchObject({ ok: true, stage: "executed", orderId: 99 });
+    expect(ctx.calls.filter((c) => c.method === "POST" && c.path.endsWith("/orders"))).toHaveLength(1);
+    await ctx.close();
+  });
+
+  it("stops with a clear message when the server does not return the approval address", async () => {
+    const ctx = await connect(baseCfg({ enableWrite: true, showApprovalUrl: false }), lifecycle());
+    const lines: string[] = [];
+    const result = await runDemoOrder(
+      {
+        call: async (name, args) => {
+          const res = await ctx.client.callTool({ name, arguments: args });
+          return { isError: Boolean(res.isError), text: textOf(res) };
+        },
+        confirm: async () => true,
+        approve: (url) => pressExecute(url),
+        log: (l) => lines.push(l),
+        sleep: async () => {},
+      },
+      { amountUsd: 50, pollMs: 0, symbol: "CSPX.L" },
+    );
+    expect(result).toMatchObject({ ok: false, stage: "execute" });
+    expect(lines.join("\n")).toContain("ETORO_SHOW_APPROVAL_URL");
+    expect(ctx.calls.filter((c) => c.method === "POST" && c.path.endsWith("/orders"))).toHaveLength(0);
+    await ctx.close();
+  });
+
   it("previews, asks, executes on the DEMO route and follows the order", async () => {
     const { result, lines, questions, orderPosts, close } = await run(lifecycle(), {});
     expect(result).toMatchObject({ ok: true, stage: "executed", orderId: 99, positionId: 555 });
@@ -146,7 +190,7 @@ describe("order follow-up details", () => {
 });
 
 async function runClose(handler: Handler, opts: Partial<DemoCloseOptions>, answers: boolean[] = [true]) {
-  const ctx = await connect(cfg, handler, "none");
+  const ctx = await connect(cfg, handler);
   const lines: string[] = [];
   const questions: string[] = [];
   const result = await runDemoClose(
@@ -159,6 +203,7 @@ async function runClose(handler: Handler, opts: Partial<DemoCloseOptions>, answe
         questions.push(q);
         return answers.shift() ?? false;
       },
+      approve: async (url) => (await pressButton(url, "execute")).status,
       log: (l) => lines.push(l),
       sleep: async () => {},
     },

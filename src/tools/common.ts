@@ -5,13 +5,15 @@ import type { EtoroClient } from "../client.js";
 import type { Config } from "../config.js";
 import type { KeyGuard } from "../environment.js";
 import { EtoroApiError, InputError, PolicyError } from "../errors.js";
-import type { PendingStore } from "../safety.js";
+import type { ProposalStore } from "../approval/proposals.js";
+import type { TicketServer } from "../approval/server.js";
 
 export interface ToolContext {
   mcp: McpServer;
   cfg: Config;
   client: EtoroClient;
-  pending: PendingStore;
+  store: ProposalStore;
+  tickets: TicketServer;
   audit: AuditFn;
   guard: KeyGuard;
 }

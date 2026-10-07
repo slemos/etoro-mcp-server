@@ -20,13 +20,13 @@
 | *"How are the traders I copy performing?"* | One compact summary per copied trader, with their positions available on request. |
 | *"What would it cost to buy 50 dollars of AAPL, and can my account even do that?"* | Live price, the settlement types and leverage your account is offered, and an estimate of the fees. |
 | *"Show my closed trades since January."* | Your trade history, filtered by date. |
-| *"Buy 20 dollars of AAPL on my demo account."* | A **preview** (instrument, size, cost, environment) first. Nothing is sent until you approve that exact action; then Claude follows the order until it has a position. |
-| *"Close that position."* / *"Cancel that pending order."* | Same two steps: preview, then your approval. |
+| *"Prepare a purchase of 20 dollars of AAPL on my demo account."* | Claude **prepares** the order (instrument, size, costs, environment) and your browser opens an approval page with the exact action. **You** press Execute there; Claude cannot. Then it follows the order. |
+| *"Prepare closing that position."* / *"Prepare cancelling that pending order."* | Same: Claude proposes, you execute on the page. |
 | *"Add these instruments to my Tech watchlist."* | Creates and edits watchlists (no money involved). |
 
-12 read tools, 8 write tools and one gated transfer tool; see [Tools](#tools).
+13 read tools, 7 prepare-only write tools and one gated transfer tool; see [Tools](#tools).
 
-**Safe by default.** It starts **read-only and on eToro's demo environment**. The tools that can move money are not even registered until you switch them on, real money needs a second switch, and every order goes through preview → your confirmation, with size caps, a rate limit and an audit log. Your keys stay on your machine (OS keychain, password manager or a protected file) and are never shown to Claude. Details in the [safety model](#safety-model).
+**Safe by default.** It starts **read-only and on eToro's demo environment**. The tools that can move money are not even registered until you switch them on, real money needs a second switch, and Claude can only *prepare* an action: **you execute it yourself on a local approval page**, never Claude. Size caps, a rate limit and an audit log apply on top. Your keys stay on your machine (OS keychain, password manager or a protected file) and are never shown to Claude. Details in the [safety model](#safety-model).
 
 ## TL;DR: install in two minutes
 
@@ -54,7 +54,7 @@ An AI that can touch a brokerage account deserves more scrutiny than most code, 
 
 | Check | What it proves | Runs |
 |---|---|---|
-| **Tests** | Logic, the preview → confirm flow, caps and blocked paths, against a mocked eToro API and an in-memory MCP client | every push and pull request |
+| **Tests** | Logic, the prepare → you-execute flow, caps and blocked paths, against a mocked eToro API and an in-memory MCP client | every push and pull request |
 | **SAST** (CodeQL, `security-extended`) | No known vulnerability patterns in the TypeScript source | every push and pull request, weekly |
 | **Dependency audit** (`npm audit`, registry signatures, Dependabot) | The few production dependencies have no known high-severity advisories | same, plus weekly |
 | **Secret scan** (Gitleaks) | No keys or tokens in the repository or its history | same |
@@ -73,13 +73,13 @@ Details and the threat model are in [SECURITY.md](SECURITY.md).
 | Write tools | **off** | `ETORO_ENABLE_WRITE=true` registers the order/close/cancel/watchlist tools. A client cannot call a tool that does not exist. |
 | Real-money writes | **off** | On `real`, write tools also need `ETORO_ALLOW_REAL_WRITE=true`. |
 | Transfers | **off** | The internal-transfer tool needs `real` + both switches + `ETORO_ALLOW_TRANSFERS=true`. |
-| Preview first | always | Orders, closes, cancels and transfers are two steps: `etoro_prepare_*` (preview) then `etoro_confirm_action`. |
-| Human in the loop | on for `real` | Via MCP elicitation the client shows you the exact action. If the client cannot show it and `ETORO_REQUIRE_ELICITATION` is true (default on `real`), the action is refused. |
+| Claude proposes, you execute | always | Every change (orders, closes, cancels, transfers, watchlists) is an `etoro_prepare_*` call that only registers a proposal. The server opens a local approval page in your browser; **only pressing Execute there sends anything to eToro**. No tool Claude can call executes an action, and the HTTP client refuses every write route without the permission that button issues. |
+| The approval page | always | Served on `127.0.0.1` only, with a one-time secret in its address that is not given to Claude by default, a `Host` check (DNS rebinding), `Origin` and anti-CSRF checks, no JavaScript and every external string escaped. |
 | Size caps | 100 USD / order, 500 USD / session | `ETORO_MAX_ORDER_USD` (exposure = amount × leverage) and `ETORO_MAX_SESSION_USD`. |
 | Rate brake | 5 writes / minute | `ETORO_MAX_WRITES_PER_MINUTE`. |
 | Route allowlist | fixed | The HTTP client can only call the routes in [`src/endpoints.ts`](src/endpoints.ts), only on the eToro host, and refuses write routes when writes are off. |
 | Environment guard | always | Before any trading preview the server reads the key's scopes (`GET /api/v1/me`) and checks that the account answering for `ETORO_ENV` is that environment's account (`demoCid`/`realCid`). It refuses if the key lacks Write permission for the environment, if the data belongs to the other account, or if this cannot be verified. |
-| Idempotency | always | Each prepared action has its own `x-request-id`, reused on retries, and a confirmation can be executed only once. |
+| Idempotency | always | Each prepared action has its own `x-request-id`, reused on retries, and it can be executed only once. |
 | Tool annotations | always | Read and write tools are separate and carry MCP annotations (`readOnlyHint`, `destructiveHint`, `title`), so clients can apply sensible permission prompts. |
 | Secrets | — | Never in tool inputs, results, errors or the audit log. `ETORO_BASE_URL` can only point to an `https://*.etoro.com` host. |
 
@@ -224,11 +224,12 @@ All settings are environment variables (see [`.env.example`](.env.example)). The
 | `ETORO_ALLOW_REAL_WRITE` | `false` | Second switch required for write tools when `ETORO_ENV=real`. |
 | `ETORO_ALLOW_TRANSFERS` | `false` | Register the internal-transfer tool (real only, needs both switches above). |
 | `ETORO_STRICT_KEY_SCOPE` | `true` on real, `false` on demo | Refuse trading previews when the key can also write in the *other* environment. On real it means the key must be real-only; on demo it would mean the key must not be able to trade real money. Set it explicitly to override either default. |
-| `ETORO_REQUIRE_ELICITATION` | `true` on real, `false` on demo | Refuse writes unless the client can ask you to approve them. |
+| `ETORO_OPEN_BROWSER` | `true` | Open the approval page in your default browser when an action is prepared. If it cannot be opened, the address is in the server's log (stderr). |
+| `ETORO_SHOW_APPROVAL_URL` | `false` | Put the approval page's address in the tool result. That lets Claude see it, and with browser tools open it: meant for scripts (`npm run demo:order` uses it) and for machines without a browser. |
 | `ETORO_MAX_ORDER_USD` | `100` | Max exposure (amount × leverage) or transfer amount per action. |
 | `ETORO_MAX_SESSION_USD` | `500` | Max total exposure executed until the server restarts. |
 | `ETORO_MAX_WRITES_PER_MINUTE` | `5` | Local brake on executed writes (eToro also rate-limits). |
-| `ETORO_CONFIRM_TTL_SECONDS` | `300` | How long a preview stays confirmable. |
+| `ETORO_CONFIRM_TTL_SECONDS` | `600` | How long a prepared action waits for you on the approval page. |
 | `ETORO_MAX_RESPONSE_CHARS` | `120000` | Output size cap per tool result. Above it, arrays are shortened to their first N items (the result stays valid JSON and lists each array's real length). |
 | `ETORO_DEBUG` | `false` | Log each HTTP call to eToro (method, path, query names, status, duration) to stderr. Never logs keys, headers or bodies. |
 | `ETORO_AUDIT_LOG` | unset | Append JSON-lines audit events to this file (also logged to stderr). |
@@ -236,7 +237,7 @@ All settings are environment variables (see [`.env.example`](.env.example)). The
 
 ## Tools
 
-12 **read** tools (always available) and 8 **write** tools (+1 gated transfer tool). Full parameters and the eToro routes they use are in [docs/TOOLS.md](docs/TOOLS.md).
+13 **read** tools (always available) and 7 **write** tools that only *prepare* (+1 gated transfer tool). Full parameters and the eToro routes they use are in [docs/TOOLS.md](docs/TOOLS.md).
 
 | Tool | Kind | Purpose |
 |---|---|---|
@@ -252,20 +253,21 @@ All settings are environment variables (see [`.env.example`](.env.example)). The
 | `etoro_check_eligibility` | read | Settlement types, leverage, limits per instrument |
 | `etoro_get_trading_costs` | read | What-if cost breakdown for an order |
 | `etoro_list_watchlists` | read | Your watchlists |
-| `etoro_prepare_open_position` | write (preview) | Validate + preview an order; returns `confirmationId` |
+| `etoro_get_action_status` | read | Where a prepared action stands (waiting, executed with eToro's answer, rejected, expired, failed) |
+| `etoro_prepare_open_position` | write (preview) | Validate + preview an order, open its approval page; returns `actionId` |
 | `etoro_prepare_close_position` | write (preview) | Preview closing all/part of a position |
 | `etoro_prepare_cancel_order` | write (preview) | Preview cancelling a pending order |
 | `etoro_prepare_transfer` | write (preview, gated) | Preview an internal transfer (real + opt-in only) |
-| `etoro_confirm_action` | write | Execute a previewed action (single use) |
-| `etoro_create_watchlist` / `etoro_add_watchlist_items` / `etoro_remove_watchlist_items` / `etoro_delete_watchlist` | write | Manage watchlists (no money involved) |
+| `etoro_prepare_create_watchlist` / `..._add_watchlist_items` / `..._remove_watchlist_items` / `..._delete_watchlist` | write (preview) | Propose watchlist changes (no money involved); you execute them on the page |
 
 ### Example: a guarded order
 
 ```
-You:    Buy 50 USD of CSPX.L as a CFD on my demo account.
+You:    Prepare a purchase of 50 USD of CSPX.L as a CFD on my demo account.
 Claude: [etoro_prepare_open_position] → preview: BUY CSPX.L (id 1234) | $50.00 | 1x | cfd | mkt | DEMO,
-        eligibility, estimated costs, confirmationId 6b1c…  (nothing sent yet)
-Claude: [etoro_confirm_action]        → your client asks you to approve that exact action → order sent
+        eligibility, estimated costs, actionId 6b1c…  (nothing sent; your browser opens the approval page)
+You:    (review the page, press Execute)                → the server sends the order to eToro
+Claude: [etoro_get_action_status]     → executed, eToro's orderId
 Claude: [etoro_get_order]             → status of the order
 ```
 
@@ -283,7 +285,7 @@ npm run demo:order -- --close-position 123456789                # close an open 
 npm run demo:order -- --symbol AAPL --amount 50 -y 2>&1 | tee demo-order.log   # no questions, output to a log
 ```
 
-The script forces `ETORO_ENV=demo` whatever your environment says, stops unless the connection check proves the key reaches your demo account, and asks before sending anything. `-y` (or `--yes`) answers yes to the questions — the order and, with `--close`, the close — so you can pipe the output to a log (use `2>&1` to include the server's audit lines). Without a terminal and without `-y` it refuses to start instead of hanging. Use a key with demo **Write** permission. After a fill it prints the new position's `settlement` (`cfd` or `real`) with its `settlementTypeID` and `isSettled`. `--settlement real` on an account that is only offered CFDs is refused at the preview.
+The script forces `ETORO_ENV=demo` whatever your environment says, stops unless the connection check proves the key reaches your demo account, and asks in the terminal before sending anything; your "yes" (or `-y`) is what it uses to press Execute on the approval page for you. `-y` (or `--yes`) answers yes to the questions — the order and, with `--close`, the close — so you can pipe the output to a log (use `2>&1` to include the server's audit lines). Without a terminal and without `-y` it refuses to start instead of hanging. Use a key with demo **Write** permission. After a fill it prints the new position's `settlement` (`cfd` or `real`) with its `settlementTypeID` and `isSettled`. `--settlement real` on an account that is only offered CFDs is refused at the preview.
 
 ## Known limitations
 
@@ -291,8 +293,9 @@ The script forces `ETORO_ENV=demo` whatever your environment says, stops unless 
 - **Responses are passed through as eToro sends them.** The shapes come from eToro's reference pages and from a live demo account (see "Where it stands" above); trade history, watchlists, balances and rates have not been confirmed live yet. If a field is missing or renamed, please open an issue with the (redacted) response shape (`--verbose --mask` in the smoke script produces one that is safe to paste).
 - **Some demo *read* paths are inferred** from eToro's documented demo/real naming pattern (marked `inferred` in [`src/endpoints.ts`](src/endpoints.ts)); the demo *write* paths and the demo cost endpoint are documented.
 - **Instrument lookup is by exact ticker or id** (no free-text search). ETF tickers on eToro carry an exchange suffix such as `CSPX.L`.
-- **Elicitation support varies by client.** Claude Code supports it (2.1.76+); support in other hosts may lag. On `real`, writes are refused when the client cannot ask you, unless you set `ETORO_REQUIRE_ELICITATION=false` and accept confirming through the conversation alone.
-- Prompt injection is a real risk for any tool-using agent: do not let Claude read untrusted content (web pages, emails, documents) in the same session in which it can place real orders, and do not auto-approve `etoro_confirm_action`.
+- **Claude cannot execute, by design.** Claude's own rules keep it from executing financial transactions, so the server never asks it to: it prepares, you press Execute on the approval page. That needs a browser on the same computer (or `ETORO_SHOW_APPROVAL_URL=true` to read the address from the log or result); without a screen, nothing can be executed.
+- **Prepared actions live in memory.** They are forgotten when the server restarts (for example when Claude Desktop restarts it), and expire after `ETORO_CONFIRM_TTL_SECONDS`.
+- Prompt injection is a real risk for any tool-using agent: do not let Claude read untrusted content (web pages, emails, documents) in the same session in which it can prepare real orders, and read the approval page carefully before pressing Execute. If Claude has browser tools, keep `ETORO_SHOW_APPROVAL_URL` off so it never sees the page's address.
 - No streaming/WebSocket data, no copy-trading actions, no OAuth (API key pair only).
 - Eligibility to use the API and the instruments available depend on your account and jurisdiction. In particular, depending on jurisdiction some accounts can only open **CFDs**, not real shares: `settlementType: "real"` is then rejected by eToro (seen on a demo account that was offered only CFDs). `etoro_prepare_open_position` reads the eligibility answer first and refuses a settlement type the account is not offered, before anything can be confirmed.
 - **Two instruments for some stocks.** eToro lists a regular-trading-hours instrument (symbol ending in `.RTH`) next to the 24/5 one for some stocks. The preview shows the exact symbol and instrument id, and warns on `.RTH`; pass `instrumentId` when in doubt.
@@ -327,7 +330,7 @@ src/
   config.ts      env parsing, switches, caps
   endpoints.ts   the complete route allowlist (read vs write)
   client.ts      HTTP client: auth headers, idempotency ids, 429 retry, redaction, policy checks
-  safety.ts      pending confirmations, limits, human confirmation (elicitation)
+  approval/      proposals (limits, status), the local approval page (server, renderer, browser opener), the write permission
   audit.ts       JSON-lines audit trail
   tools/         read.ts, write.ts, common.ts
 test/            vitest, including MCP client ↔ server tests over an in-memory transport

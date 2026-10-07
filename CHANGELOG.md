@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.0 — unreleased
+
+**Claude proposes, you execute.** Claude's own rules keep it from executing financial transactions (it refused to call `etoro_confirm_action` even on a demo account, and said so), so the server no longer asks it to: every change is only *prepared* by Claude and executed by you, on a local approval page. This is a breaking change.
+
+### Changed (breaking)
+- **No tool executes an action any more.** `etoro_confirm_action` is gone. Every write tool is now an `etoro_prepare_*` tool that registers a proposal and opens an approval page in your browser with the exact action (environment, instrument, size, costs, warnings). Only pressing **Execute** there sends the request to eToro; **Reject** or waiting past `ETORO_CONFIRM_TTL_SECONDS` sends nothing. The prepare tools return an `actionId` (formerly `confirmationId`) and no longer expose the page's address unless `ETORO_SHOW_APPROVAL_URL=true`.
+- Watchlist changes follow the same rule and were renamed: `etoro_create_watchlist`, `etoro_add_watchlist_items`, `etoro_remove_watchlist_items` and `etoro_delete_watchlist` are now `etoro_prepare_create_watchlist`, `etoro_prepare_add_watchlist_items`, `etoro_prepare_remove_watchlist_items` and `etoro_prepare_delete_watchlist`.
+- MCP elicitation is no longer used, and `ETORO_REQUIRE_ELICITATION` is gone (an old value is ignored). The approval page works the same in every client, including Claude Desktop, which has no elicitation.
+- `ETORO_CONFIRM_TTL_SECONDS` defaults to 600 (was 300).
+- `etoro_check_connection` no longer reports `requireHumanConfirmation` or `client.supportsConfirmationPrompts`; `mode.executionByUserOnly` is always true.
+
+### Added
+- `etoro_get_action_status` (read-only): where a prepared action stands (pending, executing, executed with eToro's answer, rejected, expired, failed).
+- The local approval page: served on 127.0.0.1 only (random port, started on first use), with a single-use 256-bit secret in its address, `Host` / `Origin` / anti-CSRF checks, plain HTML with every external string escaped and no JavaScript, and a strict CSP. (Checked in a real browser: the page uses `Referrer-Policy: same-origin`, because `no-referrer` makes browsers send `Origin: null` on its own forms.)
+- `ETORO_OPEN_BROWSER` (default true) and `ETORO_SHOW_APPROVAL_URL` (default false; meant for scripts and machines without a browser).
+- A structural write gate: the HTTP client refuses every write route unless it receives the permission the proposal store issues when you press Execute; a test covers every write route and checks that only `src/approval/` mints it.
+- `npm run demo:order` still asks in the terminal; your answer (or `-y`) makes the script press Execute on the approval page for you.
+
+### Security and release
+- `security:check` now also verifies that no tool executes an action, that nothing is sent to eToro before Execute, and the approval page's behaviour (escaping, CSP, wrong token, `Host`, `Origin` and anti-CSRF value refused, a GET never executes, the address is not given to Claude by default). Tests: 148.
+
 ## 0.2.1 — 2026-10-06
 
 Polish for the Claude Desktop install, from trying the 0.2.0 bundle.
