@@ -1,17 +1,69 @@
 # eToro MCP Server (unofficial)
 
-An [MCP](https://modelcontextprotocol.io) server that lets Claude (and other MCP clients) work with **your own eToro account** through the [eToro Public API](https://api-portal.etoro.com): read your portfolio, balances and market data, and — only if you opt in — preview, place, close and cancel orders.
+**Talk to your eToro account from Claude.** Ask about your portfolio in plain language, check prices and costs, and — only if you choose to turn it on — place orders that you approve one by one.
+
+[![tests](https://img.shields.io/github/actions/workflow/status/slemos/etoro-mcp-server/ci.yml?branch=main&label=tests%20%C2%B7%20build%20%C2%B7%20security%20checks)](https://github.com/slemos/etoro-mcp-server/actions/workflows/ci.yml)
+[![security](https://img.shields.io/github/actions/workflow/status/slemos/etoro-mcp-server/security.yml?branch=main&label=SAST%20%C2%B7%20dependencies%20%C2%B7%20secrets)](https://github.com/slemos/etoro-mcp-server/actions/workflows/security.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![node](https://img.shields.io/badge/node-%E2%89%A520-339933)](package.json)
+[![MCP](https://img.shields.io/badge/MCP-server-8A2BE2)](https://modelcontextprotocol.io)
 
 > **Disclaimer.** This project is not affiliated with, endorsed by or supported by eToro. "eToro" is a trademark of its owner. Nothing here is financial advice. Trading — especially with leverage or CFDs — can lose money, and software that lets an AI act on a brokerage account can lose it faster. Read the [safety model](#safety-model), start on the **demo** environment, and check eToro's API terms before automating anything.
 
-## Highlights
+## What it does
 
-- **Read-only and demo by default.** Out of the box the server exposes 12 read tools against eToro's demo environment. Write tools are not even registered until you enable them.
-- **Preview → confirm for every order.** `etoro_prepare_*` tools validate the request, check eligibility, estimate costs and enforce size caps, then return a one-time `confirmationId`. Nothing is sent to eToro until `etoro_confirm_action` runs it, and — on clients that support MCP elicitation — you are asked to approve the exact action.
-- **Real money needs a second opt-in**, and defaults to requiring that human prompt.
-- **Hard limits in code**: per-order exposure cap, per-session cap, writes-per-minute limit, strict route allowlist, single-use and expiring confirmations, JSON audit log.
-- **Keys stay local.** Credentials come from your OS keychain or password manager (`*_CMD`), a protected file (`*_FILE`), environment variables, or the `.mcpb` bundle's keychain storage; are never accepted as tool arguments, and are redacted from errors and logs.
-- Separate read and write tools with MCP annotations (`readOnlyHint`, `destructiveHint`, `title`) so clients can apply sensible permission prompts.
+[MCP](https://modelcontextprotocol.io) is the standard way to give Claude tools. This server gives Claude a set of tools that talk to the [eToro Public API](https://api-portal.etoro.com) with **your own keys**, so instead of opening the app and clicking around you can just ask:
+
+| You say | What happens |
+|---|---|
+| *"How is my portfolio doing? What are my biggest positions?"* | Claude reads your positions, balances and profit and loss, and summarises them. |
+| *"How are the traders I copy performing?"* | One compact summary per copied trader, with their positions available on request. |
+| *"What would it cost to buy 50 dollars of AAPL, and can my account even do that?"* | Live price, the settlement types and leverage your account is offered, and an estimate of the fees. |
+| *"Show my closed trades since January."* | Your trade history, filtered by date. |
+| *"Buy 20 dollars of AAPL on my demo account."* | A **preview** (instrument, size, cost, environment) first. Nothing is sent until you approve that exact action; then Claude follows the order until it has a position. |
+| *"Close that position."* / *"Cancel that pending order."* | Same two steps: preview, then your approval. |
+| *"Add these instruments to my Tech watchlist."* | Creates and edits watchlists (no money involved). |
+
+12 read tools, 8 write tools and one gated transfer tool; see [Tools](#tools).
+
+**Safe by default.** It starts **read-only and on eToro's demo environment**. The tools that can move money are not even registered until you switch them on, real money needs a second switch, and every order goes through preview → your confirmation, with size caps, a rate limit and an audit log. Your keys stay on your machine (OS keychain, password manager or a protected file) and are never shown to Claude. Details in the [safety model](#safety-model).
+
+## TL;DR: install in two minutes
+
+You need an eToro **API key pair**; a **Read** key on the **Demo** environment is enough to start ([how to get one](#getting-etoro-api-keys)).
+
+**Claude Desktop**
+
+1. Download `etoro-mcp-server-<version>.mcpb` from the [latest release](https://github.com/slemos/etoro-mcp-server/releases/latest) (or build it: `npm ci && npm run mcpb:pack`).
+2. Double-click it, or drag it into **Settings → Extensions**. Claude Desktop will say the extension is *unsigned*: that is expected, and you can [check where the file came from](#verifying-a-release).
+3. Paste your API key and user key, keep the environment on `demo`, and leave **Enable write tools** off. The keys go to your OS keychain.
+4. Start a chat and ask: *"Check my eToro connection."* Then try *"How is my portfolio doing?"*
+
+**Claude Code**
+
+```bash
+git clone https://github.com/slemos/etoro-mcp-server.git && cd etoro-mcp-server && npm ci && npm run build
+claude mcp add etoro -- node "$(pwd)/dist/index.js"   # reads ETORO_API_KEY / ETORO_USER_KEY from your environment
+```
+
+Other MCP clients and safer ways to hand over the keys (keychain, password manager, protected file) are in [Install](#install) and [Securing your setup](#securing-your-setup).
+
+## Why you can trust it
+
+An AI that can touch a brokerage account deserves more scrutiny than most code, so the project treats security as a feature, and checks it automatically on every change:
+
+| Check | What it proves | Runs |
+|---|---|---|
+| **Tests** | Logic, the preview → confirm flow, caps and blocked paths, against a mocked eToro API and an in-memory MCP client | every push and pull request |
+| **SAST** (CodeQL, `security-extended`) | No known vulnerability patterns in the TypeScript source | every push and pull request, weekly |
+| **Dependency audit** (`npm audit`, registry signatures, Dependabot) | The few production dependencies have no known high-severity advisories | same, plus weekly |
+| **Secret scan** (Gitleaks) | No keys or tokens in the repository or its history | same |
+| **Dynamic security checks** (`npm run security:check`) | The *built* server, run as a real process with the network cut off, exposes only the tools each permission switch allows, refuses a non-eToro base URL, rejects hostile arguments before any request, cannot be made to call another API path, and never leaks the keys into results, logs or the audit trail | every CI run and release |
+| **Build provenance + checksums + SBOM** | A release file was built by this repository's workflow from the tagged commit, after everything above passed | every release |
+
+Details and the threat model are in [SECURITY.md](SECURITY.md).
+
+**Where it stands (v0.2.0).** Early software. It has been exercised against a live eToro **demo** account: connection check, portfolio, positions, PnL, instrument lookup, eligibility, cost estimates, and placing, following and closing a demo order. Trade history, watchlists, balances and rates are covered by tests but not yet confirmed against a live account, and nothing has been run with real money. Start on demo.
 
 ## Safety model
 
@@ -28,6 +80,7 @@ An [MCP](https://modelcontextprotocol.io) server that lets Claude (and other MCP
 | Route allowlist | fixed | The HTTP client can only call the routes in [`src/endpoints.ts`](src/endpoints.ts), only on the eToro host, and refuses write routes when writes are off. |
 | Environment guard | always | Before any trading preview the server reads the key's scopes (`GET /api/v1/me`) and checks that the account answering for `ETORO_ENV` is that environment's account (`demoCid`/`realCid`). It refuses if the key lacks Write permission for the environment, if the data belongs to the other account, or if this cannot be verified. |
 | Idempotency | always | Each prepared action has its own `x-request-id`, reused on retries, and a confirmation can be executed only once. |
+| Tool annotations | always | Read and write tools are separate and carry MCP annotations (`readOnlyHint`, `destructiveHint`, `title`), so clients can apply sensible permission prompts. |
 | Secrets | — | Never in tool inputs, results, errors or the audit log. `ETORO_BASE_URL` can only point to an `https://*.etoro.com` host. |
 
 Also strongly recommended on the eToro side: create a **Read** key unless you need to trade, restrict it by **IP**, and set an **expiry**. Keys are separate for Demo and Real, so a demo key can never touch real money.
@@ -236,7 +289,7 @@ The script forces `ETORO_ENV=demo` whatever your environment says, stops unless 
 ## Known limitations
 
 - **Very large responses are shortened.** A big portfolio (many positions or copy-trading mirrors) can exceed the output cap; the server then keeps the first N items of each array and says how many there really were. Prefer narrower tools or raise `ETORO_MAX_RESPONSE_CHARS`.
-- **Responses are passed through as eToro sends them.** The shapes were taken from eToro's reference pages but the server could not be exercised against a live account in its first version. If a field is missing or renamed, please open an issue with the (redacted) response shape.
+- **Responses are passed through as eToro sends them.** The shapes come from eToro's reference pages and from a live demo account (see "Where it stands" above); trade history, watchlists, balances and rates have not been confirmed live yet. If a field is missing or renamed, please open an issue with the (redacted) response shape (`--verbose --mask` in the smoke script produces one that is safe to paste).
 - **Some demo *read* paths are inferred** from eToro's documented demo/real naming pattern (marked `inferred` in [`src/endpoints.ts`](src/endpoints.ts)); the demo *write* paths and the demo cost endpoint are documented.
 - **Instrument lookup is by exact ticker or id** (no free-text search). ETF tickers on eToro carry an exchange suffix such as `CSPX.L`.
 - **Elicitation support varies by client.** Claude Code supports it (2.1.76+); support in other hosts may lag. On `real`, writes are refused when the client cannot ask you, unless you set `ETORO_REQUIRE_ELICITATION=false` and accept confirming through the conversation alone.
