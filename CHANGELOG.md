@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.0 — unreleased
+## 0.6.0 — 2026-10-07
 
 What-if questions on past prices, without placing or preparing anything.
 
