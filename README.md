@@ -89,8 +89,6 @@ See [SECURITY.md](SECURITY.md) for the threat model and how to report a vulnerab
 
 ## Install
 
-> v0.2.0 is not published to npm yet. Build from source (below) or use the `.mcpb` bundle attached to a GitHub release.
-
 ### Claude Desktop (MCPB bundle)
 
 1. Get `etoro-mcp-server-<version>.mcpb` from the GitHub release, or build it: `npm ci && npm run mcpb:pack`.
@@ -138,7 +136,7 @@ It is a standard **stdio** server: run `node dist/index.js` with the environment
 3. Choose the environment (**Demo** first), the permission (**Read**, or **Write** only if you want to trade) and, ideally, an IP allowlist and an expiry. SMS verification is required.
 4. You get an API key (`x-api-key`) and a user key (`x-user-key`). Treat both like passwords.
 
-Reference: [Authentication](https://api-portal.etoro.com/core/getting-started/authentication.md).
+Reference: [Authentication](https://api-portal.etoro.com/core/getting-started/authentication).
 
 ## Securing your setup
 
