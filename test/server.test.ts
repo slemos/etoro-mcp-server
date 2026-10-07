@@ -441,6 +441,16 @@ describe("read tools", () => {
     }
   });
 
+  it("trade history goes to the documented demo and real routes", async () => {
+    for (const [env, path] of [["demo", "/api/v1/trading/info/trade/demo/history"], ["real", "/api/v1/trading/info/trade/history"]] as const) {
+      const { client, calls, close } = await connect(baseCfg({ env }), () => ({ json: [] }));
+      await client.callTool({ name: "etoro_get_trade_history", arguments: { minDate: "2026-09-01" } });
+      expect(calls[0]!.path).toBe(path);
+      expect(calls[0]!.query).toEqual({ minDate: "2026-09-01" });
+      await close();
+    }
+  });
+
   it("validates exactly-one-of rules", async () => {
     const { client, calls, close } = await connect(baseCfg(), () => ({ json: {} }));
     const none = await client.callTool({ name: "etoro_get_order", arguments: {} });

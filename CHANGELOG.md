@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- `etoro_get_trade_history` on the demo environment called a route that does not exist (`/api/v1/trading/info/demo/trade/history`, answered `RouteNotFound`). The documented path is `/api/v1/trading/info/trade/demo/history`. It had been marked as inferred and was wrongly treated as confirmed in 0.4.0; the other demo routes (portfolio breakdown, PnL, order lookup, eligibility) were checked against their reference pages and are right. A test now pins every demo route.
+
 ### Security and release
 - `main` is protected on GitHub: no direct pushes, force pushes or deletion, for anyone including the owner (administrators are included in the rule); changes go through pull requests that must pass `test (20)`, `test (22)`, `bundle`, `CodeQL (SAST)`, `Dependency audit` and `Secret scan`. Merged branches are deleted.
 - OpenSSF Scorecard workflow (`scorecard.yml`) and README badge.

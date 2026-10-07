@@ -12,6 +12,13 @@ describe("endpoints", () => {
     expect(R.closePosition("real", 7).path).toBe("/api/v1/trading/execution/market-close-orders/positions/7");
     expect(R.closePosition("demo", 7).path).toBe("/api/v1/trading/execution/demo/market-close-orders/positions/7");
     expect(R.costs("demo").path).toBe("/api/v2/trading/info/demo/costs");
+    // The demo trade history route puts "demo" after "trade", unlike the portfolio, PnL and order routes.
+    expect(R.tradeHistory("demo").path).toBe("/api/v1/trading/info/trade/demo/history");
+    expect(R.tradeHistory("real").path).toBe("/api/v1/trading/info/trade/history");
+    expect(R.portfolioBreakdown("demo").path).toBe("/api/v1/trading/info/demo/portfolio");
+    expect(R.pnl("demo").path).toBe("/api/v1/trading/info/demo/pnl");
+    expect(R.orderLookup("demo").path).toBe("/api/v2/trading/info/demo/orders:lookup");
+    expect(R.eligibility("demo").path).toBe("/api/v2/trading/info/demo/eligibility");
     expect(R.modifyPosition("demo", 7)).toMatchObject({ method: "PATCH", kind: "write", path: "/api/v2/trading/demo/positions/7" });
     expect(R.modifyPosition("real", 7)).toMatchObject({ method: "PATCH", kind: "write", path: "/api/v2/trading/positions/7" });
   });

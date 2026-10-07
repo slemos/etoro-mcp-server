@@ -67,7 +67,7 @@ An AI that can touch a brokerage account deserves more scrutiny than most code, 
 
 Details and the threat model are in [SECURITY.md](SECURITY.md).
 
-**Where it stands (v0.4.0).** Early software, tried against a live eToro **demo** account from Claude Desktop: every read tool (connection check, portfolio, positions, PnL, balances, trade history, instrument lookup and text search, rates, candles, eligibility, cost estimates, watchlists), and the prepare → you-execute flow for opening an order and changing a stop loss. Closing and cancelling from Claude Desktop, watchlist changes and transfers are covered by tests but not yet exercised live (the demo script has closed positions), and nothing has been run with real money. Start on demo.
+**Where it stands (v0.4.0).** Early software, tried against a live eToro **demo** account from Claude Desktop: the connection check, portfolio, positions, PnL, balances, instrument lookup and text search, rates, candles, eligibility, cost estimates and watchlist listing, and the prepare → you-execute flow for opening an order and changing a stop loss. Trade history on demo had a wrong route until the next release (found in a live test, fixed in the changelog's Unreleased section). Closing and cancelling from Claude Desktop, watchlist changes and transfers are covered by tests but not yet exercised live (the demo script has closed positions), and nothing has been run with real money. Start on demo.
 
 ## Safety model
 

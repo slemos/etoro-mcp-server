@@ -13,7 +13,7 @@ All tools are prefixed `etoro_`. Read tools are annotated `readOnlyHint: true`; 
 | `etoro_get_portfolio_breakdown` | `GET /api/v1/trading/info/portfolio` (demo: `/info/demo/portfolio`) | `view` (`summary` default, `mirror`, `raw`), `mirrorId`, `limit` (≤200, default 50), `offset` |
 | `etoro_get_pnl` | `GET /api/v1/trading/info/real/pnl` (demo: `/info/demo/pnl`) | same as the breakdown: `view`, `mirrorId`, `limit`, `offset` |
 | `etoro_get_balances` | `GET /api/v1/balances` | `displayCurrency`, `includeZeroBalances`, `includeSubAccounts`, `accountTypes` |
-| `etoro_get_trade_history` | `GET /api/v1/trading/info/trade/history` (demo: `/info/demo/...`) | `minDate` (YYYY-MM-DD), `page`, `pageSize` |
+| `etoro_get_trade_history` | `GET /api/v1/trading/info/trade/history` (demo: `/info/trade/demo/history`) | `minDate` (YYYY-MM-DD), `page`, `pageSize` |
 | `etoro_get_order` | `GET /api/v2/trading/info/orders:lookup` (demo: `/info/demo/...`) | exactly one of `orderId`, `referenceId` |
 | `etoro_get_instruments` | `GET /api/v2/market-data/instruments` | `symbols[]` or `instrumentIds[]`, `type`, `pageSize` |
 | `etoro_get_rates` | `GET /api/v1/market-data/instruments/rates` | `instrumentIds[]` (1–100) |
