@@ -70,15 +70,15 @@ describe("time helpers", () => {
 describe("HistoryDb", () => {
   it("stores actions and finds them by words, ids, filters and dates, newest first", () => {
     const db = new HistoryDb(":memory:", () => T0);
-    db.insertAction(action({ id: "a1", summary: "OPEN BUY AAPL | $50", createdAt: T0 - 3 * 86_400_000, orderId: 386877831 }));
-    db.insertAction(action({ id: "a2", tool: "close_position", summary: "CLOSE position 3614128430", positionId: 3614128430, createdAt: T0 - 86_400_000, status: "executed" }));
+    db.insertAction(action({ id: "a1", summary: "OPEN BUY AAPL | $50", createdAt: T0 - 3 * 86_400_000, orderId: 100200301 }));
+    db.insertAction(action({ id: "a2", tool: "close_position", summary: "CLOSE position 400500601", positionId: 400500601, createdAt: T0 - 86_400_000, status: "executed" }));
     db.insertAction(action({ id: "a3", env: "real", tool: "cancel_order", summary: "CANCEL order 99", createdAt: T0, status: "rejected" }));
 
     expect(db.search().rows.map((r) => r.id)).toEqual(["a3", "a2", "a1"]);
     expect(db.search({ q: "aapl" }).rows.map((r) => r.id)).toEqual(["a1"]);
-    expect(db.search({ q: "386877831" }).rows.map((r) => r.id)).toEqual(["a1"]);
-    expect(db.search({ q: "3614128430" }).rows.map((r) => r.id)).toEqual(["a2"]);
-    expect(db.search({ q: "close 3614128430" }).rows.map((r) => r.id)).toEqual(["a2"]);
+    expect(db.search({ q: "100200301" }).rows.map((r) => r.id)).toEqual(["a1"]);
+    expect(db.search({ q: "400500601" }).rows.map((r) => r.id)).toEqual(["a2"]);
+    expect(db.search({ q: "close 400500601" }).rows.map((r) => r.id)).toEqual(["a2"]);
     expect(db.search({ q: "close aapl" }).total).toBe(0);
     expect(db.search({ env: "real" }).rows.map((r) => r.id)).toEqual(["a3"]);
     expect(db.search({ status: "executed" }).rows.map((r) => r.id)).toEqual(["a2"]);
@@ -244,7 +244,7 @@ describe("ProposalStore with the history", () => {
   it("records the life cycle: prepared, executed with eToro's ids, rejected, failed, expired", async () => {
     let t = T0;
     const store = new ProposalStore(baseCfg({ confirmTtlMs: 60_000 }), () => t);
-    const ok = store.create({ ...input(10, async () => ({ orderForOpen: { orderID: 386877831 }, token: "x" })), refs: { instrumentId: 1001 } });
+    const ok = store.create({ ...input(10, async () => ({ orderForOpen: { orderID: 100200301 }, token: "x" })), refs: { instrumentId: 1001 } });
     const bad = store.create(input(10, async () => Promise.reject(new Error("boom"))));
     const no = store.create(input());
     const late = store.create(input());
@@ -254,7 +254,7 @@ describe("ProposalStore with the history", () => {
     t += 60_001;
     store.get(late.id);
 
-    expect(store.db.get(ok.id)).toMatchObject({ status: "executed", orderId: 386877831, instrumentId: 1001, exposureUsd: 10 });
+    expect(store.db.get(ok.id)).toMatchObject({ status: "executed", orderId: 100200301, instrumentId: 1001, exposureUsd: 10 });
     expect(store.db.get(bad.id)).toMatchObject({ status: "failed", error: "boom" });
     expect(store.db.get(no.id)?.status).toBe("rejected");
     expect(store.db.get(late.id)?.status).toBe("expired");
