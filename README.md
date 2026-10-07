@@ -45,6 +45,8 @@ See [SECURITY.md](SECURITY.md) for the threat model and how to report a vulnerab
 3. Fill in the form: API key, user key, environment (`demo` to start). Keys are stored in your OS keychain.
 4. Leave **Enable write tools** off until you have tried the read tools.
 
+Claude Desktop shows an "unsigned extension" notice because the bundle is not signed with a code-signing certificate (see [Verifying a release](#verifying-a-release) for how to check where it came from). Some organisations restrict which extensions may be installed; if yours does, ask your administrator or build from source.
+
 ### Claude Code
 
 ```bash
@@ -144,7 +146,18 @@ The server runs as you. Another program running as your user can read what you c
 
 ### Verifying what you install
 
-Building from source is small and auditable (`npm ci` uses the committed lockfile). Release bundles are published with a `SHA256SUMS` file; compare it with `shasum -a 256 etoro-mcp-server-*.mcpb`. v0.2.0 bundles are not code-signed yet.
+Building from source is small and auditable (`npm ci` uses the committed lockfile). Release bundles are built by GitHub Actions from the tagged commit, after tests and security checks pass.
+
+### Verifying a release
+
+Each release attaches the bundle, a `SHA256SUMS` file and an SBOM (`*.sbom.cdx.json`, CycloneDX). The bundle is **not code-signed with a certificate**; its provenance is attested instead, which proves it was produced by this repository's release workflow:
+
+```bash
+shasum -a 256 -c SHA256SUMS --ignore-missing
+gh attestation verify etoro-mcp-server-<version>.mcpb --repo slemos/etoro-mcp-server
+```
+
+If you would rather not trust a binary at all, build it yourself (`npm ci && npm run mcpb:pack`) and compare the result with the release.
 
 ## Configuration
 
@@ -240,6 +253,7 @@ npm run typecheck
 npm test                 # unit + end-to-end tests with a mocked eToro API (no network, no keys)
 npm run build            # tsc → dist/
 node scripts/smoke.mjs   # launch the built server over stdio and list tools (dummy keys)
+npm run security:check   # runs the built server with the network cut off: permission switches, hostile inputs, secret redaction
 npm run mcpb:pack        # esbuild bundle → server/index.js, then etoro-mcp-server.mcpb
 ```
 

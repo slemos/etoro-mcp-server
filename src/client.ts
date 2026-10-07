@@ -56,6 +56,11 @@ export class EtoroClient {
     this.assertAllowed(route);
 
     const url = new URL(this.cfg.baseUrl + route.path);
+    // An id of "." or ".." survives percent-encoding, and URL parsing then collapses it ("/watchlists/.." becomes
+    // "/api/v1/"), which would send the request to a route that was never allowlisted. Require the path to survive parsing.
+    if (url.pathname !== route.path) {
+      throw new PolicyError(`Refusing route ${route.id}: its path changes when normalised, so an identifier contains a dot segment.`);
+    }
     for (const [key, value] of Object.entries(opts.query ?? {})) {
       if (value === undefined || value === null) continue;
       url.searchParams.set(key, Array.isArray(value) ? value.join(",") : String(value));

@@ -18,7 +18,19 @@ This server runs **locally with your privileges** and holds credentials for a br
 | Key that can also trade real money while the server is set to demo | `etoro_check_connection` lists the scopes and warns; `ETORO_STRICT_KEY_SCOPE` (on by default for real, off for demo) refuses trading previews with such keys; environment-pinned routes and the account-owner check keep the server on the configured environment | Without strict mode the key itself can still trade the other environment outside this server. |
 | Over-privileged key | Docs recommend Read keys, IP allowlists, expiry, separate Demo/Real keys | Entirely under the user's control on eToro's side. |
 | Duplicate execution | Per-action idempotency key reused on retries; single-use confirmations | eToro's own idempotency semantics apply. |
-| Malicious dependency | Small dependency set (`@modelcontextprotocol/sdk`, `zod`); lockfile committed; CI runs tests | Supply-chain risk can never be zero. |
+| Malicious or vulnerable dependency | Small dependency set (`@modelcontextprotocol/sdk`, `zod`); lockfile committed; `npm audit` (high and above) and `npm audit signatures` run in CI and weekly; Dependabot proposes updates; GitHub Actions are pinned to commit SHAs | Supply-chain risk can never be zero. |
+| Tampered release bundle | Releases are built by a workflow that first checks the tag, runs the tests and the security checks; the bundle carries a build-provenance attestation and `SHA256SUMS`, and an SBOM is attached | The bundle is not signed with a certificate, so an installer cannot see a publisher name; verify the attestation (see the README). |
+
+## Automated checks
+
+| Check | What it covers | When |
+|---|---|---|
+| CodeQL (`security-extended` queries) | Static analysis of the TypeScript source | Every push to `main`, every pull request, weekly |
+| `npm audit`, `npm audit signatures` | Known advisories and registry signatures of production dependencies | Same |
+| Gitleaks | Secrets in the repository and its history | Same |
+| `npm run security:check` | Dynamic checks against the built server as a real process, with the network cut off and fake keys: which tools exist under each permission switch, that a non-eToro base URL is refused, that malformed or hostile arguments are rejected without any request, that identifiers cannot change the request path, that keys never appear in results, stderr or the audit log | Every CI run and every release |
+
+There is no web interface or open port, so a conventional DAST scanner has nothing to attack; the dynamic checks above exercise the same ground (inputs and outputs) over stdio. The tests (`npm test`) cover the logic against a mocked eToro API.
 
 ## Operating recommendations
 

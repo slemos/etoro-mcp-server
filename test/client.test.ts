@@ -50,6 +50,25 @@ describe("EtoroClient", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("refuses identifiers that URL normalisation would turn into another route", async () => {
+    const { fn, calls } = mockFetch(() => ({ json: {} }));
+    const client = new EtoroClient(baseCfg({ enableWrite: true }), fn, noSleep);
+    for (const watchlistId of ["..", ".", "%2e%2e"]) {
+      const safe = watchlistId === "%2e%2e";
+      const attempt = client.call(R.deleteWatchlist(watchlistId));
+      if (safe) await attempt;
+      else await expect(attempt).rejects.toBeInstanceOf(PolicyError);
+    }
+    // "%2e%2e" is encoded again ("%252e%252e"), so it stays one literal segment; "a/b" and "../x" are encoded too.
+    await client.call(R.addWatchlistItems("a/b"), { body: [] });
+    await client.call(R.addWatchlistItems("../x"), { body: [] });
+    expect(calls.map((c) => c.path)).toEqual([
+      "/api/v1/watchlists/%252e%252e",
+      "/api/v1/watchlists/a%2Fb/items",
+      "/api/v1/watchlists/..%2Fx/items",
+    ]);
+  });
+
   it("refuses paths outside /api/ and inconsistent method/kind routes", async () => {
     const { fn } = mockFetch(() => ({ json: {} }));
     const client = new EtoroClient(baseCfg({ enableWrite: true }), fn, noSleep);

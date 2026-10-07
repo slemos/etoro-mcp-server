@@ -36,7 +36,8 @@
     "smoke": "node scripts/smoke.mjs",
     "smoke:live": "node --env-file=.env scripts/smoke.mjs --live",
     "verify": "node --env-file=.env scripts/smoke.mjs --report",
-    "demo:order": "node --env-file=.env scripts/demo-order.mjs"
+    "demo:order": "node --env-file=.env scripts/demo-order.mjs",
+    "security:check": "node scripts/security-check.mjs"
   },
   "keywords": [
     "mcp",

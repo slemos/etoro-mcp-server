@@ -25,5 +25,10 @@ The test suite uses a mocked eToro API and an in-memory MCP client/server pair: 
 ## Pull requests
 
 - Keep changes focused; update `README.md`, `docs/TOOLS.md` and `CHANGELOG.md` when behavior changes.
-- `npm run typecheck`, `npm test` and `npm run build` must pass; for packaging changes also run `npm run mcpb:validate`.
+- `npm run typecheck`, `npm test`, `npm run build` and `npm run security:check` must pass; for packaging changes also run `npm run mcpb:validate`.
 - Bump `VERSION` in `src/version.ts` together with `package.json` and `manifest.json` only in release PRs (a test checks they match).
+
+## Releasing
+
+1. In a release commit on `main`: bump the three version fields and give the CHANGELOG heading a date (`## 0.3.0 — 2026-11-02`).
+2. Tag that commit `v0.3.0` and push the tag (`v0.3.0-rc.1` makes a pre-release). The Release workflow checks the tag against the three versions, the CHANGELOG and `main`, runs CI and the security checks, builds and attests the bundle, and publishes it with `SHA256SUMS` and an SBOM. It publishes nothing if any step fails.
