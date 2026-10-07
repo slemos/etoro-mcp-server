@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 — unreleased
+## 0.2.0 — 2026-10-06
 
 - Settlement awareness: `etoro_prepare_open_position` reads the eligibility answer (for the instrument and the long/short direction) and rejects a `settlementType` the account is not offered, before anything can be confirmed. eToro itself only rejects it after accepting the request (error 2011: "Requested settlement type: 1 is disallowed"), as seen when asking for `real` on an account offered only CFDs. The preview returns `settlement: { requested, offered }` and, when only one type is offered and none was requested, says which one the order will use.
 - Compact portfolio views add `settlement` (`cfd` | `real`), derived from `settlementTypeID` (`0` = CFD, `1` = real; other ids are left unlabelled). `npm run demo:order` prints it for the new or closed position.
