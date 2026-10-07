@@ -40,8 +40,8 @@ export class EtoroClient {
     if (route.method === "GET" && route.kind !== "read") {
       throw new PolicyError("GET routes must be read routes.");
     }
-    if (route.method === "DELETE" && route.kind !== "write") {
-      throw new PolicyError("DELETE routes must be write routes.");
+    if ((route.method === "DELETE" || route.method === "PATCH") && route.kind !== "write") {
+      throw new PolicyError(`${route.method} routes must be write routes.`);
     }
     if (route.kind === "write") {
       if (!writeEnabled(this.cfg)) {

@@ -312,6 +312,112 @@ export function registerWriteTools(ctx: ToolContext): void {
     }),
   );
 
+  // ---------------------------------------------------------------- modify
+  mcp.registerTool(
+    "etoro_prepare_modify_position",
+    {
+      title: "Preview changing the stop loss or take profit of an eToro position",
+      description:
+        `Previews changing the stop loss and/or take profit of an open position in the ${envLabel} account: new rates, trailing or fixed stop, or removing either. ` +
+        "Get positionId from etoro_get_portfolio_breakdown. Rates are prices of the instrument, not percentages. The preview compares them with the position's direction and the current price. " +
+        "eToro may move funds from the balance into the position's margin when a stop loss is deeper than its allowed maximum. " +
+        "Sends nothing to eToro: it registers the action and opens an approval page where the user, and only the user, can execute it; it returns an actionId.",
+      inputSchema: {
+        positionId: id,
+        stopLossRate: z.number().positive().optional().describe("New stop loss price."),
+        stopLossType: z.enum(["fixed", "trailing"]).optional().describe("'trailing' makes the stop follow the price up (long positions)."),
+        clearStopLoss: z.boolean().optional().describe("Remove the stop loss, where eToro allows it (not for leveraged positions)."),
+        takeProfitRate: z.number().positive().optional().describe("New take profit price."),
+        clearTakeProfit: z.boolean().optional().describe("Remove the take profit."),
+      },
+      annotations: WRITE("Preview changing the stop loss or take profit of an eToro position", { destructive: false, idempotent: true }),
+    },
+    guarded(async (a) => {
+      await guard.assertWritable();
+      if (a.stopLossRate === undefined && a.takeProfitRate === undefined && a.stopLossType === undefined && !a.clearStopLoss && !a.clearTakeProfit) {
+        throw new InputError("Provide at least one of stopLossRate, takeProfitRate, stopLossType, clearStopLoss or clearTakeProfit.");
+      }
+      if (a.clearStopLoss && (a.stopLossRate !== undefined || a.stopLossType !== undefined)) {
+        throw new InputError("clearStopLoss cannot be combined with stopLossRate or stopLossType.");
+      }
+      if (a.clearTakeProfit && a.takeProfitRate !== undefined) {
+        throw new InputError("clearTakeProfit cannot be combined with takeProfitRate.");
+      }
+
+      const warnings: string[] = [];
+      const breakdown = await bestEffort("Position lookup", warnings, () => client.call(R.portfolioBreakdown(env)));
+      const rawPositions = asRecord(asRecord(breakdown).clientPortfolio).positions;
+      const matched = (Array.isArray(rawPositions) ? rawPositions : []).find(
+        (p) => Number(asRecord(p).positionID ?? asRecord(p).positionId) === a.positionId,
+      );
+      if (breakdown && !matched) {
+        throw new InputError(`Position ${a.positionId} was not found among the open positions of the ${env} account. Check the id with etoro_get_portfolio_breakdown.`);
+      }
+      const pos = asRecord(matched);
+      const isBuy = typeof pos.isBuy === "boolean" ? pos.isBuy : undefined;
+      const instrumentId = Number(pos.instrumentID ?? pos.instrumentId);
+      const instrument = Number.isInteger(instrumentId) ? (await lookupInstruments(client, [instrumentId])).get(instrumentId) : undefined;
+      const rates = Number.isInteger(instrumentId)
+        ? await bestEffort("Market rate", warnings, () => client.call(R.rates(), { query: { instrumentIds: [instrumentId] } }))
+        : undefined;
+      const rate = asRecord(extractList(rates, ["rates"])[0]);
+      const bid = Number(rate.bid);
+      const ask = Number(rate.ask);
+
+      // A stop on the wrong side of the market would trigger at once; say so (eToro's own validation still applies).
+      if (isBuy !== undefined && Number.isFinite(bid) && Number.isFinite(ask)) {
+        if (a.stopLossRate !== undefined && (isBuy ? a.stopLossRate >= bid : a.stopLossRate <= ask)) {
+          warnings.push(`The new stop loss ${a.stopLossRate} is on the wrong side of the current price (bid ${bid}, ask ${ask}) for a ${isBuy ? "long" : "short"} position, so it would trigger immediately.`);
+        }
+        if (a.takeProfitRate !== undefined && (isBuy ? a.takeProfitRate <= bid : a.takeProfitRate >= ask)) {
+          warnings.push(`The new take profit ${a.takeProfitRate} is on the wrong side of the current price (bid ${bid}, ask ${ask}) for a ${isBuy ? "long" : "short"} position, so it would trigger immediately.`);
+        }
+      }
+      if (a.stopLossRate !== undefined) {
+        warnings.push("If this stop loss is deeper than eToro's allowed maximum, eToro moves funds from your balance into the position's margin.");
+      }
+
+      const body: Record<string, unknown> = {};
+      if (a.stopLossRate !== undefined) body.stopLossRate = a.stopLossRate;
+      if (a.stopLossType !== undefined) body.stopLossType = a.stopLossType;
+      if (a.clearStopLoss) body.clearStopLoss = true;
+      if (a.takeProfitRate !== undefined) body.takeProfitRate = a.takeProfitRate;
+      if (a.clearTakeProfit) body.clearTakeProfit = true;
+
+      const stopText = a.clearStopLoss
+        ? "remove"
+        : a.stopLossRate !== undefined
+          ? `${a.stopLossRate}${a.stopLossType ? ` (${a.stopLossType})` : ""}`
+          : a.stopLossType !== undefined
+            ? `keep the rate, make it ${a.stopLossType}`
+            : "unchanged";
+      const profitText = a.clearTakeProfit ? "remove" : a.takeProfitRate !== undefined ? String(a.takeProfitRate) : "unchanged";
+      const label = instrument ? `${instrument.symbol} (id ${instrument.instrumentId})` : Number.isInteger(instrumentId) ? `instrument ${instrumentId}` : "unknown instrument";
+      const summary = `MODIFY position ${a.positionId} (${label}) | stop loss: ${stopText} | take profit: ${profitText} | environment ${envLabel}`;
+      const current = (rateName: string, flag: string) => (pos[flag] === true ? "none" : pos[rateName] !== undefined ? String(pos[rateName]) : "unknown");
+      const rows = [
+        row("Action", "Change the stop loss / take profit of an open position"),
+        row("Position id", String(a.positionId)),
+        row("Instrument", label + (instrument?.displayName ? `, ${instrument.displayName}` : "")),
+        ...(isBuy !== undefined ? [row("Direction", isBuy ? "Long (buy)" : "Short (sell)")] : []),
+        ...(matched ? [row("Open position", `${String(pos.units ?? "?")} units, opened at ${String(pos.openRate ?? "?")}, leverage ${String(pos.leverage ?? "?")}x`)] : []),
+        ...(Number.isFinite(bid) && Number.isFinite(ask) ? [row("Current price", `bid ${bid} / ask ${ask}`)] : []),
+        ...(matched ? [row("Current stop loss", current("stopLossRate", "isNoStopLoss")), row("Current take profit", current("takeProfitRate", "isNoTakeProfit"))] : []),
+        row("New stop loss", stopText),
+        row("New take profit", profitText),
+      ];
+      const proposal = store.create({
+        tool: "modify_position",
+        summary,
+        rows,
+        warnings,
+        exposureUsd: 0,
+        run: ({ requestId, grant }) => client.call(R.modifyPosition(env, a.positionId), { body, requestId, grant }),
+      });
+      return ok({ ...(await announce(ctx, proposal)), matchedPosition: matched ?? null, request: body, warnings });
+    }),
+  );
+
   // ---------------------------------------------------------------- cancel
   mcp.registerTool(
     "etoro_prepare_cancel_order",

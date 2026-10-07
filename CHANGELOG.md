@@ -12,6 +12,7 @@
 - `etoro_check_connection` no longer reports `requireHumanConfirmation` or `client.supportsConfirmationPrompts`; `mode.executionByUserOnly` is always true.
 
 ### Added
+- `etoro_prepare_modify_position`: change the stop loss and/or take profit of an open position (new rates, trailing or fixed stop, or removing them), through the same prepare → you-execute flow. The preview shows the direction, current price and current stop/take profit, and warns when a new rate is on the wrong side of the price (it would trigger at once) or may move funds into the position's margin. Route: `PATCH /api/v2/trading/positions/{id}` (demo: `/api/v2/trading/demo/positions/{id}`).
 - `etoro_get_action_status` (read-only): where a prepared action stands (pending, executing, executed with eToro's answer, rejected, expired, failed).
 - The local approval page: served on 127.0.0.1 only (random port, started on first use), with a single-use 256-bit secret in its address, `Host` / `Origin` / anti-CSRF checks, plain HTML with every external string escaped and no JavaScript, and a strict CSP. (Checked in a real browser: the page uses `Referrer-Policy: same-origin`, because `no-referrer` makes browsers send `Origin: null` on its own forms.)
 - `ETORO_OPEN_BROWSER` (default true) and `ETORO_SHOW_APPROVAL_URL` (default false; meant for scripts and machines without a browser).
@@ -19,7 +20,7 @@
 - `npm run demo:order` still asks in the terminal; your answer (or `-y`) makes the script press Execute on the approval page for you.
 
 ### Security and release
-- `security:check` now also verifies that no tool executes an action, that nothing is sent to eToro before Execute, and the approval page's behaviour (escaping, CSP, wrong token, `Host`, `Origin` and anti-CSRF value refused, a GET never executes, the address is not given to Claude by default). Tests: 148.
+- `security:check` now also verifies that no tool executes an action, that nothing is sent to eToro before Execute, and the approval page's behaviour (escaping, CSP, wrong token, `Host`, `Origin` and anti-CSRF value refused, a GET never executes, the address is not given to Claude by default). Tests: 152.
 
 ## 0.2.1 — 2026-10-06
 

@@ -12,6 +12,8 @@ describe("endpoints", () => {
     expect(R.closePosition("real", 7).path).toBe("/api/v1/trading/execution/market-close-orders/positions/7");
     expect(R.closePosition("demo", 7).path).toBe("/api/v1/trading/execution/demo/market-close-orders/positions/7");
     expect(R.costs("demo").path).toBe("/api/v2/trading/info/demo/costs");
+    expect(R.modifyPosition("demo", 7)).toMatchObject({ method: "PATCH", kind: "write", path: "/api/v2/trading/demo/positions/7" });
+    expect(R.modifyPosition("real", 7)).toMatchObject({ method: "PATCH", kind: "write", path: "/api/v2/trading/positions/7" });
   });
 
   it("classifies routes: POST what-if/eligibility are reads, execution routes are writes", () => {

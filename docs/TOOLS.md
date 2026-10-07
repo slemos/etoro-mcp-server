@@ -32,6 +32,7 @@ Every write tool only registers a proposal and opens an approval page (`http://1
 |---|---|---|
 | `etoro_prepare_open_position` | Resolves the instrument, checks eligibility and costs, enforces `ETORO_MAX_ORDER_USD`, returns an `actionId` | `POST /api/v2/trading/execution/orders` (demo: `/execution/demo/orders`) |
 | `etoro_prepare_close_position` | Previews closing a position (`positionId`, `instrumentId`, optional `unitsToDeduct`; omit to close all) | `POST /api/v1/trading/execution/market-close-orders/positions/{positionId}` (demo: `/execution/demo/...`) |
+| `etoro_prepare_modify_position` | Previews changing the stop loss and/or take profit of an open position (`positionId`; `stopLossRate`, `stopLossType` fixed/trailing, `clearStopLoss`, `takeProfitRate`, `clearTakeProfit`; at least one). Rates are instrument prices. The preview shows the position's direction, current price and current stop/take profit, and warns when a new rate is on the wrong side of the price or may move funds into margin | `PATCH /api/v2/trading/positions/{positionId}` (demo: `/api/v2/trading/demo/positions/{positionId}`) |
 | `etoro_prepare_cancel_order` | Previews cancelling a pending order (`orderId`) | `DELETE /api/v2/trading/execution/orders/{orderId}` (demo: `/execution/demo/orders/{orderId}`) |
 | `etoro_prepare_transfer` | Previews an internal account-to-account transfer. **Real only**, needs `ETORO_ALLOW_TRANSFERS=true` | `POST /api/v1/money/transfers` |
 

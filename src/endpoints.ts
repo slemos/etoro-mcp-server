@@ -9,7 +9,7 @@
 import type { EtoroEnv } from "./config.js";
 
 export type RouteKind = "read" | "write";
-export type HttpMethod = "GET" | "POST" | "DELETE";
+export type HttpMethod = "GET" | "POST" | "PATCH" | "DELETE";
 
 export interface RouteSpec {
   id: string;
@@ -101,6 +101,13 @@ export const R = {
       env === "demo"
         ? `/api/v1/trading/execution/demo/market-close-orders/positions/${id(positionId)}`
         : `/api/v1/trading/execution/market-close-orders/positions/${id(positionId)}`,
+    ),
+  modifyPosition: (env: EtoroEnv, positionId: number) =>
+    route(
+      "modifyPosition",
+      "write",
+      "PATCH",
+      env === "demo" ? `/api/v2/trading/demo/positions/${id(positionId)}` : `/api/v2/trading/positions/${id(positionId)}`,
     ),
 
   // ---- Write: watchlists (no money involved) ------------------------------

@@ -4,6 +4,7 @@ import { API_KEY, ME, USER_KEY, type Handler, type RecordedCall, baseCfg, connec
 const WRITE_TOOLS = [
   "etoro_prepare_open_position",
   "etoro_prepare_close_position",
+  "etoro_prepare_modify_position",
   "etoro_prepare_cancel_order",
   "etoro_prepare_create_watchlist",
   "etoro_prepare_add_watchlist_items",
@@ -285,6 +286,66 @@ describe("write flow", () => {
     expect(sent.path).toBe("/api/v1/trading/execution/demo/market-close-orders/positions/777");
     expect(sent.body).toEqual({ InstrumentID: 1234, UnitsToDeduct: null });
     await ctx.close();
+  });
+
+  describe("changing a stop loss or take profit", () => {
+    const portfolio = (call: RecordedCall) =>
+      call.path.endsWith("/portfolio")
+        ? { json: { clientPortfolio: { positions: [{ positionID: 777, instrumentID: 1234, isBuy: true, units: 2, openRate: 800, leverage: 1, stopLossRate: 0.0001, isNoStopLoss: true, takeProfitRate: 999999, isNoTakeProfit: true }] } } }
+        : call.method === "PATCH"
+          ? { json: { operationId: "op-1", positionId: 777, referenceId: "r-1" } }
+          : undefined;
+
+    it("previews, then sends the documented PATCH only when the user executes", async () => {
+      const ctx = await connect(cfg, orderHandler(portfolio));
+      const prep = await ctx.prepare("etoro_prepare_modify_position", { positionId: 777, stopLossRate: 780, takeProfitRate: 900 });
+      expect(prep.request).toEqual({ stopLossRate: 780, takeProfitRate: 900 });
+      expect((prep.warnings as string[]).join(" ")).toContain("moves funds from your balance");
+      expect(ctx.calls.some((c) => c.method === "PATCH")).toBe(false);
+      const page = await (await fetch(prep.approval.url!)).text();
+      expect(page).toContain("CSPX.L");
+      expect(page).toContain("Current stop loss");
+      expect(page).toContain("780");
+      await ctx.execute(prep);
+      const sent = ctx.calls.find((c) => c.method === "PATCH")!;
+      expect(sent.path).toBe("/api/v2/trading/demo/positions/777");
+      expect(sent.body).toEqual({ stopLossRate: 780, takeProfitRate: 900 });
+      expect(await ctx.status(prep)).toMatchObject({ status: "executed", result: { operationId: "op-1" } });
+      await ctx.close();
+    });
+
+    it("warns when a stop loss or take profit is on the wrong side of the price", async () => {
+      const ctx = await connect(cfg, orderHandler(portfolio));
+      const prep = await ctx.prepare("etoro_prepare_modify_position", { positionId: 777, stopLossRate: 900, takeProfitRate: 700 });
+      const text = (prep.warnings as string[]).join(" ");
+      expect(text).toContain("new stop loss 900 is on the wrong side");
+      expect(text).toContain("new take profit 700 is on the wrong side");
+      await ctx.close();
+    });
+
+    it("can remove a take profit or switch the stop to trailing", async () => {
+      const ctx = await connect(cfg, orderHandler(portfolio));
+      const clear = await ctx.prepare("etoro_prepare_modify_position", { positionId: 777, clearTakeProfit: true });
+      expect(clear.request).toEqual({ clearTakeProfit: true });
+      const trailing = await ctx.prepare("etoro_prepare_modify_position", { positionId: 777, stopLossRate: 780, stopLossType: "trailing" });
+      expect(trailing.request).toEqual({ stopLossRate: 780, stopLossType: "trailing" });
+      await ctx.close();
+    });
+
+    it("validates the combination, and refuses a position that is not open", async () => {
+      const ctx = await connect(cfg, orderHandler(portfolio));
+      const call = async (args: Record<string, unknown>) =>
+        (await ctx.client.callTool({ name: "etoro_prepare_modify_position", arguments: args })) as { isError?: boolean; content: Array<{ text?: string }> };
+      expect(textOf(await call({ positionId: 777 }))).toContain("at least one");
+      expect(textOf(await call({ positionId: 777, clearStopLoss: true, stopLossRate: 700 }))).toContain("clearStopLoss cannot be combined");
+      expect(textOf(await call({ positionId: 777, clearTakeProfit: true, takeProfitRate: 900 }))).toContain("clearTakeProfit cannot be combined");
+      const missing = await call({ positionId: 1, stopLossRate: 700 });
+      expect(missing.isError).toBe(true);
+      expect(textOf(missing)).toContain("was not found among the open positions");
+      expect(ctx.opened).toHaveLength(0);
+      expect(ctx.calls.some((c) => c.method === "PATCH")).toBe(false);
+      await ctx.close();
+    });
   });
 
   it("cancelling goes through the same preview and the user's Execute", async () => {
