@@ -6,6 +6,7 @@ import { summarizeCandles } from "../candles.js";
 import { asRecord, lookupInstruments } from "../instruments.js";
 import { type View, compactPortfolio } from "../portfolio.js";
 import { InputError } from "../errors.js";
+import { probeRuntime } from "../runtime.js";
 import { SERVER_NAME, VERSION } from "../version.js";
 import { type ToolContext, READ, explain, extractList, fail, guarded, ok } from "./common.js";
 
@@ -146,8 +147,17 @@ export function registerReadTools({ mcp, cfg, client, store }: ToolContext): voi
           maxOrderUsd: cfg.maxOrderUsd,
           maxSessionUsd: cfg.maxSessionUsd,
           maxWritesPerMinute: cfg.maxWritesPerMinute,
+          maxDailyUsd: cfg.maxDailyUsd,
+          maxDailyWrites: cfg.maxDailyWrites,
+          timeZone: cfg.timezone,
         },
+        today: (() => {
+          const u = store.db.usage(cfg.env, Date.now(), cfg.timezone);
+          return { day: u.day, executedUsd: Number(u.usd.toFixed(2)), executedWrites: u.writes };
+        })(),
+        history: { persistent: store.db.persistent, ...(store.db.persistent ? { path: store.db.path } : {}) },
         server: { name: SERVER_NAME, version: VERSION },
+        runtime: await probeRuntime(),
       });
     }),
   );
@@ -475,13 +485,28 @@ export function registerReadTools({ mcp, cfg, client, store }: ToolContext): voi
       title: "Get the status of a prepared eToro action",
       description:
         "Where an action prepared by an etoro_prepare_* tool stands: pending (waiting for the user on the approval page), executing, executed (with eToro's answer, such as an order id), " +
-        "rejected, expired or failed. Only the user can execute an action. Memory only: actions are forgotten when the server restarts.",
+        "rejected, expired or failed. Only the user can execute an action. Also finds actions from earlier sessions in the local history.",
       inputSchema: { actionId: z.string().uuid() },
       annotations: READ("Get the status of a prepared eToro action"),
     },
     guarded(async ({ actionId }) => {
       const proposal = store.get(actionId);
-      if (!proposal) return fail("Unknown actionId. It may have expired and been forgotten, or the server restarted since it was prepared.");
+      if (!proposal) {
+        const past = store.db.get(actionId);
+        if (!past) return fail("Unknown actionId: it is not in this session or in the history.");
+        return ok({
+          actionId: past.id,
+          tool: past.tool,
+          environment: past.env,
+          status: past.status,
+          summary: past.summary,
+          createdAt: new Date(past.createdAt).toISOString(),
+          ...(past.decidedAt !== undefined ? { decidedAt: new Date(past.decidedAt).toISOString() } : {}),
+          ...(past.status === "executed" ? { result: past.result } : {}),
+          ...(past.status === "failed" ? { error: past.error } : {}),
+          fromHistory: true,
+        });
+      }
       return ok(store.view(proposal));
     }),
   );

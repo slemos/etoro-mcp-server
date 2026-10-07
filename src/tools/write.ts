@@ -239,6 +239,7 @@ export function registerWriteTools(ctx: ToolContext): void {
         rows,
         warnings,
         exposureUsd: exposure,
+        refs: { instrumentId: instrument.instrumentId },
         run: ({ requestId, grant }) => client.call(R.createOrder(env), { body, requestId, grant }),
       });
 
@@ -306,6 +307,7 @@ export function registerWriteTools(ctx: ToolContext): void {
         rows,
         warnings,
         exposureUsd: 0,
+        refs: { positionId, instrumentId },
         run: ({ requestId, grant }) => client.call(R.closePosition(env, positionId), { body, requestId, grant }),
       });
       return ok({ ...(await announce(ctx, proposal)), matchedPosition: matched ?? null, warnings });
@@ -412,6 +414,7 @@ export function registerWriteTools(ctx: ToolContext): void {
         rows,
         warnings,
         exposureUsd: 0,
+        refs: { positionId: a.positionId, ...(Number.isInteger(instrumentId) ? { instrumentId } : {}) },
         run: ({ requestId, grant }) => client.call(R.modifyPosition(env, a.positionId), { body, requestId, grant }),
       });
       return ok({ ...(await announce(ctx, proposal)), matchedPosition: matched ?? null, request: body, warnings });
@@ -440,6 +443,7 @@ export function registerWriteTools(ctx: ToolContext): void {
         rows: [row("Action", "Cancel a pending order"), row("Order id", String(orderId)), ...(status.name ? [row("Current status", String(status.name))] : [])],
         warnings,
         exposureUsd: 0,
+        refs: { orderId },
         run: ({ requestId, grant }) => client.call(R.cancelOrder(env, orderId), { requestId, grant }),
       });
       return ok({ ...(await announce(ctx, proposal)), order: order ?? null, warnings });

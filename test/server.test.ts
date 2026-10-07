@@ -441,6 +441,16 @@ describe("read tools", () => {
     }
   });
 
+  it("trade history goes to the documented demo and real routes", async () => {
+    for (const [env, path] of [["demo", "/api/v1/trading/info/trade/demo/history"], ["real", "/api/v1/trading/info/trade/history"]] as const) {
+      const { client, calls, close } = await connect(baseCfg({ env }), () => ({ json: [] }));
+      await client.callTool({ name: "etoro_get_trade_history", arguments: { minDate: "2026-09-01" } });
+      expect(calls[0]!.path).toBe(path);
+      expect(calls[0]!.query).toEqual({ minDate: "2026-09-01" });
+      await close();
+    }
+  });
+
   it("validates exactly-one-of rules", async () => {
     const { client, calls, close } = await connect(baseCfg(), () => ({ json: {} }));
     const none = await client.callTool({ name: "etoro_get_order", arguments: {} });
@@ -645,6 +655,7 @@ describe("environment guard on trading previews", () => {
       ETORO_ENV: "real",
       ETORO_ENABLE_WRITE: "true",
       ETORO_ALLOW_REAL_WRITE: "true",
+      ETORO_HISTORY_DB: "off", // never touch the real history file from a test
     });
     expect(realCfg.strictKeyScope).toBe(true);
     const both = { ...ME, scopes: ["etoro-public:trade.demo:write", "etoro-public:trade.real:write"] };

@@ -3,10 +3,9 @@
  * The HTTP client refuses anything that is not described here.
  *
  * Source: https://api-portal.etoro.com (llms.txt index and API reference pages).
- * The demo read routes for the portfolio breakdown, PnL, trade history, order lookup
- * and eligibility follow eToro's documented demo/real naming pattern rather than a
- * page of their own; each was confirmed against a live demo account (2026-10-06).
- * Mark a new route `inferred` if you add one that has not been tried live.
+ * The demo routes do not all follow one naming pattern (trade history is
+ * `/info/trade/demo/history`, not `/info/demo/trade/history`): copy each path from its
+ * own reference page, and mark a route `inferred` if you could not.
  */
 import type { EtoroEnv } from "./config.js";
 
@@ -50,7 +49,7 @@ export const R = {
       "tradeHistory",
       "read",
       "GET",
-      env === "demo" ? "/api/v1/trading/info/demo/trade/history" : "/api/v1/trading/info/trade/history",
+      env === "demo" ? "/api/v1/trading/info/trade/demo/history" : "/api/v1/trading/info/trade/history",
     ),
   orderLookup: (env: EtoroEnv) =>
     route(
