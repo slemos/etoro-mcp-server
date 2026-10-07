@@ -8,6 +8,8 @@ import { ConfigError, type Config, transfersEnabled, writeEnabled } from "./conf
 import { KeyGuard } from "./environment.js";
 import { HistoryDb } from "./history/db.js";
 import { registerHistoryTools } from "./tools/history.js";
+import { registerInvestorTools } from "./tools/investors.js";
+import { registerMoneyTools } from "./tools/money.js";
 import { registerSimulationTools } from "./tools/simulate.js";
 import { type ToolContext, configureOutput, explain } from "./tools/common.js";
 import { registerReadTools } from "./tools/read.js";
@@ -68,6 +70,8 @@ export function createServer(cfg: Config, deps: ServerDeps = {}): { mcp: McpServ
   registerReadTools(ctx);
   registerHistoryTools(ctx);
   registerSimulationTools(ctx);
+  registerInvestorTools(ctx);
+  registerMoneyTools(ctx);
   if (writeEnabled(cfg)) registerWriteTools(ctx);
   return { mcp, ctx };
 }

@@ -79,6 +79,19 @@ export const R = {
   candles: (instrumentId: number) => route("candles", "read", "GET", `/api/v1/data/instruments/${id(instrumentId)}/candles`),
   watchlists: () => route("watchlists", "read", "GET", "/api/v1/watchlists"),
 
+  // ---- Read: other investors (public data) and money ----------------------
+  investorSearch: () => route("investorSearch", "read", "GET", "/api/v1/user-info/people/search"),
+  investorProfiles: () => route("investorProfiles", "read", "GET", "/api/v1/user-info/people"),
+  investorGain: (username: string) => route("investorGain", "read", "GET", `/api/v1/user-info/people/${id(username)}/gain`),
+  investorTradeInfo: (username: string) =>
+    route("investorTradeInfo", "read", "GET", `/api/v1/user-info/people/${id(username)}/tradeinfo`),
+  investorLivePortfolio: (username: string) =>
+    route("investorLivePortfolio", "read", "GET", `/api/v1/user-info/people/${id(username)}/portfolio/live`),
+  investorCopiers: (username: string) => route("investorCopiers", "read", "GET", `/api/v2/portfolios/${id(username)}/copiers`),
+  cashTransactions: (accountId: string) =>
+    route("cashTransactions", "read", "GET", `/api/v1/money/accounts/cash/${id(accountId)}/transactions`),
+  balanceHistory: () => route("balanceHistory", "read", "GET", "/api/v1/balances/history"),
+
   // ---- Write: trading -----------------------------------------------------
   createOrder: (env: EtoroEnv) =>
     route(

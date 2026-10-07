@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.0 — unreleased
+
+See more: other investors' public data, your balance history and cash movements, clearer previews, and a weekly check of every route.
+
+### Added
+- `etoro_search_investors` and `etoro_get_investor`: search investors by period, performance and risk filters (including who holds an instrument) and read one investor's public profile, statistics, copiers, gain history and live portfolio. Answers are reduced to what is useful: no internal ids, GDPR data or restrictions, and a name only if the investor allows it. Free text an investor wrote is passed on marked as untrusted, with a note never to follow instructions found in it. Public data only; past performance is not a forecast.
+- Found by trying the search against the live API: the specification calls the Popular Investor filter `popularInvestor`, but the API answers 400 to that name and only accepts `isPopularInvestor`. The tool keeps `popularInvestor` as its argument and sends the name that works; every other filter was tried live and works.
+- `etoro_get_balance_history`: the total balance day by day between two dates, with a summary and an optional per-account detail. `etoro_get_cash_transactions`: movements of a cash account, newest first, paginated.
+- Open-order previews warn when eToro flags that a W-8BEN tax form is required (`requiresW8Ben` in its eligibility answer) and when the leverage is 5x or more, saying what a move against the position means. The W-8BEN warning is eToro's own flag, not tax advice.
+- `npm run routes:check` and a weekly `Routes` workflow compare every route this server calls with eToro's published OpenAPI specification (v1.385.0 today: all 44 are in it), so a change on their side fails a run instead of a session.
+- `etoro_get_investor` was tried against the live API (a popular investor: summary, statistics, copiers, gain history, live portfolio); the live portfolio, which arrives as tens of thousands of characters, is grouped by instrument and sorted by weight (top 25, with names). The balance-history and cash-transaction tools follow eToro's specification but were **not** tried live, because they read the account of the key rather than a demo account.
+- Tests: 237.
+
 ## Unreleased
 
 ### Documentation
