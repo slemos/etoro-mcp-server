@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Documentation
+- README: a section on how this server relates to eToro's official MCP server (what each does, who executes a trade, what enforces the approval step, and which to use when), limited to what its documentation and our own tests show.
+
 ## 0.6.0 — 2026-10-07
 
 What-if questions on past prices, without placing or preparing anything.

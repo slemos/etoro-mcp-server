@@ -70,6 +70,25 @@ Details and the threat model are in [SECURITY.md](SECURITY.md).
 
 **Where it stands (v0.6.0).** Early software, tried against a live eToro **demo** account from Claude Desktop: the connection check, portfolio, positions, PnL, balances, trade history, instrument lookup and text search, rates, candles, eligibility, cost estimates and watchlist listing, the prepare → you-execute flow for opening an order and changing a stop loss, and the action history page with the daily counter. Closing and cancelling from Claude Desktop, watchlist changes and transfers are covered by tests but not yet exercised live (the demo script has closed positions), and nothing has been run with real money. Start on demo.
 
+## This server and eToro's official MCP server
+
+eToro publishes its own MCP server (`https://mcp.public-api.etoro.com`, described at <https://mcp.public-api.etoro.com/skill>). This project is independent of it and not affiliated with eToro. The two solve overlapping problems differently, and you can install both: their tool names do not collide.
+
+| | eToro's official server | This server |
+|---|---|---|
+| Publisher and support | eToro | An independent open-source project (MIT) |
+| Where it runs | Remote, hosted by eToro; your credentials go in the connection headers | Local, on your machine; credentials from your keychain, a password manager or a protected file |
+| Authentication | API key pair or OAuth | API key pair |
+| Coverage | Read and write tools plus a generic route catalogue (`execute-read`, `execute-write`) covering the whole Public API, and trader profiles | A fixed, reviewed route allowlist; no trader profiles yet |
+| Who executes a trade | Claude: `prepare-trade` returns a signed token to the model, and `place-trade` sends the order with it | **You**: Claude prepares, and only the Execute button on a local page sends anything |
+| What enforces the approval step | Its documentation describes it as an instruction to the model (show the confirmation, get an explicit yes); it does not describe a server-side human confirmation | The server: no tool Claude can call executes anything, and the HTTP client refuses a write without the permission that button issues |
+| Size limits, history | Not described in its documentation | Per-order, per-session and per-day caps; a searchable local history |
+| Extras | Instrument overview, trader profiles | Candles with summaries, what-if simulations and backtests, a pre-close estimate |
+
+As of October 2026, from its public documentation and our own tests on a demo account: in one Claude Code session the official server's `prepare-trade` and `place-trade` flow placed an order after a plain "yes". In an earlier test of this project, a session declined to call the tool that executed. We did not isolate why; whether a model calls an execute tool is its own decision, and a gate that depends on it is only as strong as that decision.
+
+**Which to use.** Use the official server for the widest coverage and for OAuth, if you accept that the model can place orders once you approve in chat. Use this one if you want the approval to be enforced outside the model, local control of your keys, spending limits and a record of what you did. If you only read data, either works. Whichever you choose, start on demo, give the key only the permissions it needs, and keep real-money access off until you have decided you want it.
+
 ## Safety model
 
 | Layer | Default | What it does |
