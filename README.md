@@ -79,7 +79,8 @@ Details and the threat model are in [SECURITY.md](SECURITY.md).
 | Transfers | **off** | The internal-transfer tool needs `real` + both switches + `ETORO_ALLOW_TRANSFERS=true`. |
 | Claude proposes, you execute | always | Every change (orders, closes, cancels, transfers, watchlists) is an `etoro_prepare_*` call that only registers a proposal. The server opens a local approval page in your browser; **only pressing Execute there sends anything to eToro**. No tool Claude can call executes an action, and the HTTP client refuses every write route without the permission that button issues. |
 | The approval page | always | Served on `127.0.0.1` only, with a one-time secret in its address that is not given to Claude by default, a `Host` check (DNS rebinding), `Origin` and anti-CSRF checks, no JavaScript and every external string escaped. |
-| Size caps | 100 USD / order, 500 USD / session | `ETORO_MAX_ORDER_USD` (exposure = amount × leverage) and `ETORO_MAX_SESSION_USD`. |
+| Size caps | 100 USD / order, 500 USD / session, 1000 USD / day | `ETORO_MAX_ORDER_USD` (exposure = amount × leverage), `ETORO_MAX_SESSION_USD` and `ETORO_MAX_DAILY_USD`. |
+| Daily limits | 1000 USD and 25 writes per day, per environment | `ETORO_MAX_DAILY_USD` and `ETORO_MAX_DAILY_WRITES`, counted in the history database, so they hold across restarts and across server processes (Claude Desktop and Claude Code each start their own). A day starts at midnight in `ETORO_TIMEZONE`. Only you can change them, in the server's configuration: no tool can. |
 | Rate brake | 5 writes / minute | `ETORO_MAX_WRITES_PER_MINUTE`. |
 | Route allowlist | fixed | The HTTP client can only call the routes in [`src/endpoints.ts`](src/endpoints.ts), only on the eToro host, and refuses write routes when writes are off. |
 | Environment guard | always | Before any trading preview the server reads the key's scopes (`GET /api/v1/me`) and checks that the account answering for `ETORO_ENV` is that environment's account (`demoCid`/`realCid`). It refuses if the key lacks Write permission for the environment, if the data belongs to the other account, or if this cannot be verified. |
@@ -90,6 +91,16 @@ Details and the threat model are in [SECURITY.md](SECURITY.md).
 Also strongly recommended on the eToro side: create a **Read** key unless you need to trade, restrict it by **IP**, and set an **expiry**. Keys are separate for Demo and Real, so a demo key can never touch real money.
 
 See [SECURITY.md](SECURITY.md) for the threat model and how to report a vulnerability.
+
+## History and daily limits
+
+Everything Claude prepares, and what you do with it (execute, reject, let it expire), is recorded in a local SQLite file (`ETORO_HISTORY_DB`, private to your user, never containing keys or approval links). It has three jobs:
+
+- **Look back.** Ask Claude *"what did I do this week?"* (`etoro_get_action_history`), or ask it to **open the history** (`etoro_open_history`): a page in your browser with a search box (words, tickers, order or position ids), filters for date, environment, action and status, the detail of each action with eToro's answer and its timeline, today's use of the daily limits, and a CSV download. The page listens on `127.0.0.1` only, uses a secret address that expires after an hour, is read-only and has no JavaScript. Nothing in it can change or delete the history.
+- **Hold the daily limits.** `ETORO_MAX_DAILY_USD` and `ETORO_MAX_DAILY_WRITES` are checked and reserved in one database transaction when you press Execute, so two server processes cannot both spend the same allowance, and a restart does not reset it.
+- **Survive restarts.** An action that was waiting when the server stopped is shown as expired, and one that was executing is shown as failed with a note to check eToro.
+
+The file is a plain SQLite database; you can open it with any SQLite tool, and deleting it only erases the record (and resets the day's counters).
 
 ## Install
 
@@ -216,7 +227,7 @@ If you would rather not trust a binary at all, build it yourself (`npm ci && npm
 
 ## Configuration
 
-All settings are environment variables (see [`.env.example`](.env.example)). The server does not read a `.env` file by itself: export the variables, or load a git-ignored `.env` with Node's flag, e.g. `node --env-file=.env dist/index.js` (Node 20.6+).
+All settings are environment variables (see [`.env.example`](.env.example)). The server does not read a `.env` file by itself: export the variables, or load a git-ignored `.env` with Node's flag, e.g. `node --env-file=.env dist/index.js` (Node 22.13+, which the history database needs).
 
 | Variable | Default | Description |
 |---|---|---|
@@ -233,6 +244,10 @@ All settings are environment variables (see [`.env.example`](.env.example)). The
 | `ETORO_MAX_ORDER_USD` | `100` | Max exposure (amount × leverage) or transfer amount per action. |
 | `ETORO_MAX_SESSION_USD` | `500` | Max total exposure executed until the server restarts. |
 | `ETORO_MAX_WRITES_PER_MINUTE` | `5` | Local brake on executed writes (eToro also rate-limits). |
+| `ETORO_MAX_DAILY_USD` | `1000` | Max total exposure (and transfers) executed per calendar day, per environment. Counted in the history database: it survives restarts and is shared by every server process. A request that clearly fails at eToro (a 4xx answer) gives its share back; a timeout or network error does not, because the order may exist. |
+| `ETORO_MAX_DAILY_WRITES` | `25` | Max executed writes (orders, closes, stop-loss changes, watchlist changes...) per calendar day, per environment. |
+| `ETORO_TIMEZONE` | `UTC` | IANA time zone (for example `America/Santiago`) that decides where a day starts for the daily limits and how the history page shows times. |
+| `ETORO_HISTORY_DB` | your data folder | Path of the SQLite file with the action history and the daily ledger (macOS `~/Library/Application Support/etoro-mcp-server/history.sqlite`, Linux `~/.local/share/etoro-mcp-server/`, Windows `%APPDATA%\etoro-mcp-server\`). `off` keeps it in memory only: the daily limits then restart with the server. A server that can write refuses to start if the file cannot be opened. |
 | `ETORO_CONFIRM_TTL_SECONDS` | `600` | How long a prepared action waits for you on the approval page. |
 | `ETORO_MAX_RESPONSE_CHARS` | `120000` | Output size cap per tool result. Above it, arrays are shortened to their first N items (the result stays valid JSON and lists each array's real length). |
 | `ETORO_DEBUG` | `false` | Log each HTTP call to eToro (method, path, query names, status, duration) to stderr. Never logs keys, headers or bodies. |
@@ -241,7 +256,7 @@ All settings are environment variables (see [`.env.example`](.env.example)). The
 
 ## Tools
 
-15 **read** tools (always available) and 8 **write** tools that only *prepare* (+1 gated transfer tool). Full parameters and the eToro routes they use are in [docs/TOOLS.md](docs/TOOLS.md).
+17 **read** tools (always available) and 8 **write** tools that only *prepare* (+1 gated transfer tool). Full parameters and the eToro routes they use are in [docs/TOOLS.md](docs/TOOLS.md).
 
 | Tool | Kind | Purpose |
 |---|---|---|
@@ -259,7 +274,9 @@ All settings are environment variables (see [`.env.example`](.env.example)). The
 | `etoro_check_eligibility` | read | Settlement types, leverage, limits per instrument |
 | `etoro_get_trading_costs` | read | What-if cost breakdown for an order |
 | `etoro_list_watchlists` | read | Your watchlists |
-| `etoro_get_action_status` | read | Where a prepared action stands (waiting, executed with eToro's answer, rejected, expired, failed) |
+| `etoro_get_action_status` | read | Where a prepared action stands (waiting, executed with eToro's answer, rejected, expired, failed); also finds actions from earlier sessions |
+| `etoro_get_action_history` | read | Search the local history (text, ids, dates, environment, action, status) and see today's use of the daily limits |
+| `etoro_open_history` | read | Open a read-only page in your browser to search, filter and export the history |
 | `etoro_prepare_open_position` | write (preview) | Validate + preview an order, open its approval page; returns `actionId` |
 | `etoro_prepare_close_position` | write (preview) | Preview closing all/part of a position |
 | `etoro_prepare_modify_position` | write (preview) | Preview changing the stop loss / take profit of an open position (new rates, trailing, or removing them) |

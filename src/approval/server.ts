@@ -10,8 +10,12 @@
  *  - pages are plain HTML with every external string escaped, no JavaScript, and a CSP that forbids scripts anyway.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { AddressInfo } from "node:net";
+import type { Config } from "../config.js";
+import { parseHistoryQuery } from "../history/query.js";
+import { renderAction, renderCsv, renderHistory } from "../history/render.js";
+import { dayKey } from "../history/time.js";
 import type { Proposal, ProposalStore } from "./proposals.js";
 import { renderMessage, renderTicket } from "./render.js";
 
@@ -20,10 +24,16 @@ export interface TicketServerDeps {
   /** Opens the page in the user's browser; resolves false if it cannot. */
   openUrl?: (url: string) => Promise<boolean>;
   log?: (line: string) => void;
+  /** Enables the read-only history pages (limits and time zone come from here). */
+  config?: Pick<Config, "env" | "timezone" | "maxDailyUsd" | "maxDailyWrites">;
 }
 
 const TICKET_PATH = /^\/t\/([A-Za-z0-9_-]{20,64})(?:\/(execute|reject))?$/;
+const HISTORY_PATH = /^\/h\/([A-Za-z0-9_-]{20,64})(?:\/(export\.csv)|\/a\/([0-9a-fA-F-]{36}))?$/;
 const MAX_BODY = 2048;
+const HISTORY_TTL_MS = 60 * 60_000;
+const MAX_HISTORY_LINKS = 5;
+const EXPORT_MAX_ROWS = 10_000;
 
 const SECURITY_HEADERS: Record<string, string> = {
   "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
@@ -45,6 +55,8 @@ export class TicketServer {
   private server?: Server;
   private port?: number;
   private starting?: Promise<number>;
+  /** Secret addresses of the history page, each valid for a while. Read-only: nothing here can change anything. */
+  private readonly historyLinks = new Map<string, number>();
   private readonly now: () => number;
 
   constructor(
@@ -70,6 +82,91 @@ export class TicketServer {
     } catch {
       return false;
     }
+  }
+
+  /** A fresh address of the history page, valid for an hour. Starts the server on first use. */
+  async historyUrl(): Promise<string> {
+    const port = await this.listen();
+    const t = this.now();
+    for (const [token, expires] of this.historyLinks) if (expires <= t) this.historyLinks.delete(token);
+    while (this.historyLinks.size >= MAX_HISTORY_LINKS) {
+      const oldest = this.historyLinks.keys().next().value;
+      if (oldest === undefined) break;
+      this.historyLinks.delete(oldest);
+    }
+    const token = randomBytes(32).toString("base64url");
+    this.historyLinks.set(token, t + HISTORY_TTL_MS);
+    return `http://127.0.0.1:${port}/h/${token}`;
+  }
+
+  /** Opens the history page in the browser. The address is logged to stderr, never given to the model. */
+  async openHistory(openBrowser: boolean): Promise<{ opened: boolean; url: string }> {
+    const url = await this.historyUrl();
+    this.deps.log?.(`[history] page for the user: ${url}`);
+    if (!openBrowser || !this.deps.openUrl) return { opened: false, url };
+    try {
+      return { opened: await this.deps.openUrl(url), url };
+    } catch {
+      return { opened: false, url };
+    }
+  }
+
+  private validHistoryToken(candidate: string): boolean {
+    const t = this.now();
+    let found = false;
+    for (const [token, expires] of this.historyLinks) {
+      if (safeEqual(candidate, token) && expires > t) found = true;
+    }
+    return found;
+  }
+
+  private handleHistory(req: IncomingMessage, res: ServerResponse, match: RegExpExecArray): void {
+    const config = this.deps.config;
+    const [, token, exportName, actionId] = match;
+    if (!config || !token || !this.validHistoryToken(token)) {
+      return this.send(res, 404, "text/html", renderMessage("Not found", "This history link is unknown or has expired. Ask Claude to open the history again."));
+    }
+    if (req.method !== "GET") return this.send(res, 405, "text/plain", "Method not allowed", { allow: "GET" });
+    const db = this.store.db;
+    const base = `/h/${token}`;
+    const params = new URL(req.url ?? "/", "http://127.0.0.1").searchParams;
+    const get = (name: string) => params.get(name) ?? undefined;
+
+    if (actionId) {
+      const action = db.get(actionId);
+      if (!action) return this.send(res, 404, "text/html", renderMessage("Not found", "That action is not in the history."));
+      return this.send(res, 200, "text/html", renderAction(action, db.events(actionId), { base, timezone: config.timezone }));
+    }
+
+    const parsed = parseHistoryQuery({ q: get("q"), env: get("env"), tool: get("tool"), status: get("status"), from: get("from"), to: get("to"), offset: Number(get("offset") ?? 0) }, config.timezone);
+    if (exportName) {
+      const { rows } = db.search({ ...parsed.filter, limit: EXPORT_MAX_ROWS, offset: 0 });
+      return this.send(res, 200, "text/csv", renderCsv(rows, config.timezone), {
+        "content-disposition": `attachment; filename="etoro-history-${dayKey(this.now(), config.timezone)}.csv"`,
+      });
+    }
+    const { total, rows } = db.search(parsed.filter);
+    const today = (["demo", "real"] as const).map((env) => ({ env, usage: db.usage(env, this.now(), config.timezone) }));
+    return this.send(
+      res,
+      200,
+      "text/html",
+      renderHistory({
+        base,
+        timezone: config.timezone,
+        env: config.env,
+        filter: parsed.filter,
+        form: parsed.form,
+        total,
+        rows,
+        tools: db.tools(),
+        today: today.filter((t) => t.env === config.env || t.usage.writes > 0),
+        maxDailyUsd: config.maxDailyUsd,
+        maxDailyWrites: config.maxDailyWrites,
+        persistent: db.persistent,
+        notice: parsed.problems.join(" ") || undefined,
+      }),
+    );
   }
 
   async close(): Promise<void> {
@@ -118,7 +215,10 @@ export class TicketServer {
     if (port === undefined || (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`)) {
       return this.send(res, 403, "text/plain", "Forbidden");
     }
-    const match = TICKET_PATH.exec((req.url ?? "").split("?")[0] ?? "");
+    const pathname = (req.url ?? "").split("?")[0] ?? "";
+    const historyMatch = HISTORY_PATH.exec(pathname);
+    if (historyMatch) return this.handleHistory(req, res, historyMatch);
+    const match = TICKET_PATH.exec(pathname);
     if (!match) return this.send(res, 404, "text/plain", "Not found");
     const proposal = this.store.getByToken(match[1]!);
     if (!proposal) {

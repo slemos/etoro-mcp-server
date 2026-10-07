@@ -1,7 +1,8 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type { AuditFn } from "../audit.js";
 import type { Config, EtoroEnv } from "../config.js";
-import { PolicyError } from "../errors.js";
+import { EtoroApiError, PolicyError } from "../errors.js";
+import { HistoryDb } from "../history/db.js";
 import { ApprovalGrant } from "./grant.js";
 
 export type ProposalStatus = "pending" | "executing" | "executed" | "rejected" | "expired" | "failed";
@@ -11,6 +12,12 @@ export interface ProposalRow {
   value: string;
 }
 
+export interface ActionRefs {
+  orderId?: number;
+  positionId?: number;
+  instrumentId?: number;
+}
+
 export interface ProposalInput {
   tool: string;
   /** One line describing the exact action, shown on the approval page and in the audit log. */
@@ -18,8 +25,10 @@ export interface ProposalInput {
   /** Detail lines for the approval page. */
   rows: ProposalRow[];
   warnings?: string[];
-  /** Money at risk or moved by this action, counted against the session cap. */
+  /** Money at risk or moved by this action, counted against the session and daily caps. */
   exposureUsd: number;
+  /** Ids the action is about, so the history can be searched by them. */
+  refs?: ActionRefs;
   /** Sends the request to eToro. Runs only after the user presses Execute. */
   run: (ctx: { requestId: string; grant: ApprovalGrant }) => Promise<unknown>;
 }
@@ -39,6 +48,7 @@ export interface Proposal {
   /** Reused on every attempt so a retried execution is idempotent at eToro. */
   requestId: string;
   exposureUsd: number;
+  refs: ActionRefs;
   createdAt: number;
   expiresAt: number;
   status: ProposalStatus;
@@ -60,6 +70,34 @@ const MAX_KEPT = 200;
 const KEEP_AFTER_EXPIRY_MS = 60 * 60_000;
 
 const nopAudit: AuditFn = () => {};
+const MAX_STORED_RESULT_CHARS = 50_000;
+
+/** Looks for a numeric id under one of `keys` in an eToro answer (shapes vary: orderId, OrderID, nested objects). */
+function findId(value: unknown, keys: string[], depth = 0): number | undefined {
+  if (depth > 4 || value === null || typeof value !== "object") return undefined;
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (keys.includes(k.toLowerCase()) && typeof v === "number" && Number.isSafeInteger(v) && v > 0) return v;
+  }
+  for (const v of Object.values(value as Record<string, unknown>)) {
+    const found = findId(v, keys, depth + 1);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+/**
+ * True only when eToro clearly answered "no" (a 4xx other than a timeout), so the request had no effect and its daily
+ * allowance can be given back. A network error, a timeout or a 5xx is ambiguous: the order may have gone through, so it stays counted.
+ */
+function surelyNotExecuted(err: unknown): boolean {
+  return err instanceof EtoroApiError && err.status >= 400 && err.status < 500 && err.status !== 408;
+}
+
+/** eToro's answer as stored in the history: whole when small, otherwise a marker, so one odd answer cannot bloat the file. */
+function storable(result: unknown): unknown {
+  const text = JSON.stringify(result) ?? "null";
+  return text.length <= MAX_STORED_RESULT_CHARS ? result : { truncated: true, characters: text.length, preview: text.slice(0, 2000) };
+}
 
 export class ProposalStore {
   private readonly items = new Map<string, Proposal>();
@@ -71,7 +109,23 @@ export class ProposalStore {
     private readonly now: () => number = Date.now,
     private readonly audit: AuditFn = nopAudit,
     private readonly explain: (err: unknown) => string = (err) => (err instanceof Error ? err.message : String(err)),
+    /** The durable record and the daily ledger. Tests that do not care get a throwaway in-memory one. */
+    readonly db: HistoryDb = new HistoryDb(":memory:", now),
   ) {}
+
+  /** Audit trail line + the same event in the history database. A history failure never stops an action. */
+  private emit(event: Record<string, unknown>): void {
+    this.audit(event);
+    this.persist(() => this.db.recordEvent(this.cfg.env, event));
+  }
+
+  private persist(fn: () => void): void {
+    try {
+      fn();
+    } catch (err) {
+      this.audit({ event: "history_error", error: err instanceof Error ? err.message : String(err) });
+    }
+  }
 
   create(input: ProposalInput): Proposal {
     this.sweep();
@@ -91,13 +145,29 @@ export class ProposalStore {
       env: this.cfg.env,
       requestId: randomUUID(),
       exposureUsd: input.exposureUsd,
+      refs: input.refs ?? {},
       createdAt: t,
       expiresAt: t + this.cfg.confirmTtlMs,
       status: "pending",
       run: input.run,
     };
     this.items.set(proposal.id, proposal);
-    this.audit({
+    this.persist(() =>
+      this.db.insertAction({
+        id: proposal.id,
+        env: proposal.env,
+        tool: proposal.tool,
+        summary: proposal.summary,
+        rows: proposal.rows,
+        warnings: proposal.warnings,
+        exposureUsd: proposal.exposureUsd,
+        status: proposal.status,
+        createdAt: proposal.createdAt,
+        expiresAt: proposal.expiresAt,
+        ...proposal.refs,
+      }),
+    );
+    this.emit({
       event: "prepared",
       tool: proposal.tool,
       actionId: proposal.id,
@@ -118,7 +188,7 @@ export class ProposalStore {
     return undefined;
   }
 
-  /** Throws PolicyError if executing `proposal` now would break a rate or exposure limit. */
+  /** Throws PolicyError if executing `proposal` now would break a per-minute or per-session limit (the daily limits are checked in the database). */
   assertWithinLimits(proposal: Proposal): void {
     const cutoff = this.now() - 60_000;
     this.executions = this.executions.filter((t) => t > cutoff);
@@ -142,25 +212,41 @@ export class ProposalStore {
     if (proposal.status !== "pending") return { outcome: "not_pending", proposal };
     try {
       this.assertWithinLimits(proposal);
+      // The daily limits are counted in the shared database, so they hold across server processes and restarts. Fail closed.
+      this.db.reserve({
+        actionId: id,
+        env: proposal.env,
+        exposureUsd: proposal.exposureUsd,
+        now: this.now(),
+        maxUsd: this.cfg.maxDailyUsd,
+        maxWrites: this.cfg.maxDailyWrites,
+        timezone: this.cfg.timezone,
+      });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.audit({ event: "blocked", tool: proposal.tool, actionId: id, reason: message });
+      const message = err instanceof PolicyError ? err.message : `Could not check the daily limits, so nothing was sent: ${err instanceof Error ? err.message : String(err)}`;
+      this.emit({ event: "blocked", tool: proposal.tool, actionId: id, reason: message });
       return { outcome: "blocked", message, proposal };
     }
     proposal.status = "executing";
     proposal.decidedAt = this.now();
-    this.audit({ event: "approved_by_user", tool: proposal.tool, actionId: id });
+    this.persist(() => this.db.updateAction(id, { status: "executing", decidedAt: proposal.decidedAt }));
+    this.emit({ event: "approved_by_user", tool: proposal.tool, actionId: id });
     try {
       proposal.result = await proposal.run({ requestId: proposal.requestId, grant: ApprovalGrant.mint() });
       proposal.status = "executed";
       this.executions.push(this.now());
       this.spentUsd += proposal.exposureUsd;
-      this.audit({ event: "executed", tool: proposal.tool, actionId: id, summary: proposal.summary });
+      const orderId = proposal.refs.orderId ?? findId(proposal.result, ["orderid"]);
+      const positionId = proposal.refs.positionId ?? findId(proposal.result, ["positionid"]);
+      this.persist(() => this.db.updateAction(id, { status: "executed", result: storable(proposal.result), ...(orderId !== undefined ? { orderId } : {}), ...(positionId !== undefined ? { positionId } : {}) }));
+      this.emit({ event: "executed", tool: proposal.tool, actionId: id, summary: proposal.summary });
       return { outcome: "executed", proposal };
     } catch (err) {
       proposal.status = "failed";
       proposal.error = this.explain(err).split("\n")[0];
-      this.audit({ event: "failed", tool: proposal.tool, actionId: id, error: proposal.error });
+      if (surelyNotExecuted(err)) this.persist(() => this.db.release(id));
+      this.persist(() => this.db.updateAction(id, { status: "failed", error: proposal.error }));
+      this.emit({ event: "failed", tool: proposal.tool, actionId: id, error: proposal.error });
       return { outcome: "failed", message: proposal.error, proposal };
     }
   }
@@ -172,7 +258,8 @@ export class ProposalStore {
     if (proposal.status === "pending") {
       proposal.status = "rejected";
       proposal.decidedAt = this.now();
-      this.audit({ event: "rejected", tool: proposal.tool, actionId: id });
+      this.persist(() => this.db.updateAction(id, { status: "rejected", decidedAt: proposal.decidedAt }));
+      this.emit({ event: "rejected", tool: proposal.tool, actionId: id });
     }
     return proposal;
   }
@@ -200,7 +287,8 @@ export class ProposalStore {
       if (p.status === "pending" && p.expiresAt <= t) {
         p.status = "expired";
         p.decidedAt = t;
-        this.audit({ event: "expired", tool: p.tool, actionId: id });
+        this.persist(() => this.db.updateAction(id, { status: "expired", decidedAt: t }));
+        this.emit({ event: "expired", tool: p.tool, actionId: id });
       }
       if (p.status !== "pending" && p.status !== "executing" && p.expiresAt + KEEP_AFTER_EXPIRY_MS <= t) this.items.delete(id);
     }

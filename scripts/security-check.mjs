@@ -13,7 +13,7 @@
  */
 import { spawn } from "node:child_process";
 import { request } from "node:http";
-import { mkdtempSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -313,6 +313,52 @@ async function main() {
     hiddenText.slice(0, 200),
   );
   await h.close();
+
+  // 7. The history and the daily limits: kept in a private file, shared across restarts, shown read-only.
+  const historyDb = join(work, "history.sqlite");
+  const histEnv = { ETORO_ENABLE_WRITE: "true", ETORO_SHOW_APPROVAL_URL: "true", ETORO_HISTORY_DB: historyDb, ETORO_MAX_DAILY_WRITES: "2" };
+  const hs = await start("history", histEnv);
+  const first = await prepare(hs.client, "etoro_prepare_create_watchlist", { name: "<script>alert(1)</script>" });
+  const second = await prepare(hs.client, "etoro_prepare_create_watchlist", { name: "needle-77" });
+  const third = await prepare(hs.client, "etoro_prepare_create_watchlist", { name: "three" });
+  for (const p of [first, second, third]) await pressOnPage(p.url, "execute");
+  check("the daily write limit (2) stops the third write", hs.fetches().filter((f) => f.method !== "GET").length === 2, JSON.stringify(hs.fetches().filter((f) => f.method !== "GET").length));
+  const opened = JSON.parse((await call(hs.client, "etoro_open_history", {})).text);
+  const histUrl = new URL(opened.url);
+  const histPage = await fetch(opened.url);
+  const histHtml = await histPage.text();
+  check("the history page is plain HTML: no script, hostile names escaped, CSP set", histPage.status === 200 && !histHtml.includes("<script") && histHtml.includes("&lt;script&gt;") && /default-src 'none'/.test(histPage.headers.get("content-security-policy") ?? ""));
+  check("the history page shows today's usage against the daily limits", /2 of 2 writes/.test(histHtml), histHtml.slice(histHtml.indexOf("usage"), histHtml.indexOf("usage") + 200));
+  check("a wrong history token is a 404", (await fetch(opened.url.replace(/\/h\/[^/]+/, `/h/${"A".repeat(43)}`))).status === 404);
+  const histMethods = [];
+  for (const method of ["POST", "PUT", "DELETE"]) histMethods.push((await fetch(opened.url, { method, body: method === "DELETE" ? undefined : "x" })).status);
+  check("the history page is read-only: POST, PUT and DELETE are refused", histMethods.every((c) => c === 405), histMethods.join(","));
+  const histRebound = await new Promise((resolve) => {
+    const req = request({ host: "127.0.0.1", port: Number(histUrl.port), path: histUrl.pathname, headers: { host: `evil.example:${histUrl.port}` } }, (res) => {
+      res.resume();
+      resolve(res.statusCode);
+    });
+    req.end();
+  });
+  check("the history page refuses another Host (DNS rebinding)", histRebound === 403, `status ${histRebound}`);
+  check("an approval address does not open the history, nor the other way round", (await fetch(`${histUrl.origin}/h/${new URL(first.url).pathname.split("/")[2]}`)).status === 404 && (await fetch(`${histUrl.origin}/t/${histUrl.pathname.split("/")[2]}`)).status === 404);
+  const injection = await (await fetch(`${opened.url}?q=${encodeURIComponent("'; DROP TABLE actions; --")}&env=${encodeURIComponent("<x>")}`)).text();
+  check("hostile search text is neither executed nor reflected raw", !injection.includes("<x>") && !injection.includes("<script") && /No actions match/.test(injection));
+  check("searching still works after that", /needle-77/.test(await (await fetch(`${opened.url}?q=needle-77`)).text()));
+  await hs.close();
+
+  const rawDb = [historyDb, `${historyDb}-wal`, `${historyDb}-shm`].filter((f) => existsSync(f)).map((f) => readFileSync(f).toString("latin1")).join("");
+  const tokens = [first, second, third].map((p) => new URL(p.url).pathname.split("/")[2]);
+  check("the history file never contains the keys or the approval tokens", !rawDb.includes(API_KEY) && !rawDb.includes(USER_KEY) && tokens.every((t) => !rawDb.includes(t)));
+  check("the history file is private (0600)", process.platform === "win32" || (statSync(historyDb).mode & 0o777) === 0o600, (statSync(historyDb).mode & 0o777).toString(8));
+
+  const hs2 = await start("history-restarted", histEnv);
+  const again = await prepare(hs2.client, "etoro_prepare_create_watchlist", { name: "after restart" });
+  await pressOnPage(again.url, "execute");
+  check("the daily limit survives a restart of the server", hs2.fetches().filter((f) => f.method !== "GET").length === 0);
+  const past = JSON.parse((await call(hs2.client, "etoro_get_action_history", { query: "needle-77" })).text);
+  check("Claude can search the history of an earlier session", past.total === 1 && past.actions[0].actionId === second.actionId, JSON.stringify(past).slice(0, 200));
+  await hs2.close();
 
   const failed = results.filter((r) => !r.ok);
   console.log(`\n${results.length - failed.length}/${results.length} security checks passed.`);

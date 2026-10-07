@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — unreleased
+
+A record of what you did, and daily limits that survive restarts.
+
+### Added
+- **Persistent action history** in a local SQLite file (`ETORO_HISTORY_DB`; default: your data folder, created private, no native dependency: it uses Node's built-in `node:sqlite`). Every prepared action is stored with its summary, details, warnings, exposure, status (pending, executing, executed, rejected, expired, failed), eToro's answer, the ids it concerns (order, position, instrument) and its timeline of events. An action left waiting or executing by a server that stopped is settled the next time the history is read.
+- `etoro_get_action_history`: Claude can search the history by text, ids, dates, environment, action and status, and sees today's use of the daily limits.
+- `etoro_open_history`: opens a read-only page in the browser (the approval page's local server: `127.0.0.1`, secret address valid for an hour, no JavaScript) with a search box, filters, paging, the detail of each action and a CSV download. Times use `ETORO_TIMEZONE`.
+- **Daily limits**, configurable: `ETORO_MAX_DAILY_USD` (default 1000) and `ETORO_MAX_DAILY_WRITES` (default 25), per environment, with the day starting at midnight in `ETORO_TIMEZONE` (default UTC). They are checked and reserved in one database transaction, so they hold across restarts and across server processes (Claude Desktop and Claude Code each run their own). A request that eToro clearly refuses (a 4xx) gives its share back; a timeout, network error or 5xx does not, because the order may exist. If the limits cannot be checked, nothing is sent. The three settings are also in the `.mcpb` form.
+- `etoro_check_connection` reports the daily limits, today's use, the time zone, whether the history is persistent and the runtime (`node`, `sqlite`).
+- `etoro_get_action_status` falls back to the history for actions from earlier sessions.
+- Tests: 189, and 13 more dynamic security checks (49 in total).
+
+### Changed
+- **Node 22.13 or newer is required** (was 20): the history uses `node:sqlite`. Claude Desktop's bundled Node (24.x) is fine. CI now tests Node 22 and 24, so the required checks of `main` are `test (22)` and `test (24)` instead of `test (20)` and `test (22)`.
+- A server that can write refuses to start when the history file cannot be opened (the daily limits live in it); set `ETORO_HISTORY_DB=off` to run with an in-memory history. A read-only server falls back to memory with a log line.
 
 ### Fixed
 - `etoro_get_trade_history` on the demo environment called a route that does not exist (`/api/v1/trading/info/demo/trade/history`, answered `RouteNotFound`). The documented path is `/api/v1/trading/info/trade/demo/history`. It had been marked as inferred and was wrongly treated as confirmed in 0.4.0; the other demo routes (portfolio breakdown, PnL, order lookup, eligibility) were checked against their reference pages and are right. A test now pins every demo route.

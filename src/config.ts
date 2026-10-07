@@ -31,6 +31,14 @@ export interface Config {
   /** Max total exposure + transfers executed per server process, in USD. */
   maxSessionUsd: number;
   maxWritesPerMinute: number;
+  /** Max total exposure + transfers executed per calendar day (in `timezone`), per environment, in USD. Counted across server processes. */
+  maxDailyUsd: number;
+  /** Max executed writes per calendar day (in `timezone`), per environment. */
+  maxDailyWrites: number;
+  /** IANA time zone that decides where a "day" starts for the daily limits and how the history page shows times. */
+  timezone: string;
+  /** SQLite file with the action history and the daily ledger, or ":memory:" when persistence is switched off. */
+  historyPath: string;
   confirmTtlMs: number;
   requestTimeoutMs: number;
   auditLogPath?: string;
@@ -102,6 +110,31 @@ function expandHome(path: string | undefined): string | undefined {
   if (path === undefined) return undefined;
   if (path === "~") return homedir();
   return path.startsWith("~/") ? join(homedir(), path.slice(2)) : path;
+}
+
+/** Where the history database lives by default: the user's data directory, outside any repository. */
+export function defaultDataDir(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): string {
+  if (platform === "darwin") return join(homedir(), "Library", "Application Support", "etoro-mcp-server");
+  if (platform === "win32") return join(env.APPDATA ?? join(homedir(), "AppData", "Roaming"), "etoro-mcp-server");
+  return join(env.XDG_DATA_HOME ?? join(homedir(), ".local", "share"), "etoro-mcp-server");
+}
+
+/** ETORO_HISTORY_DB: a file path, or off/false/0/none to keep the history in memory only. */
+function parseHistoryPath(raw: string | undefined): string {
+  const value = clean(raw);
+  if (value === undefined) return join(defaultDataDir(), "history.sqlite");
+  if (["off", "false", "0", "none", "memory", ":memory:"].includes(value.toLowerCase())) return ":memory:";
+  return expandHome(value) ?? value;
+}
+
+function parseTimezone(raw: string | undefined): string {
+  const value = clean(raw) ?? "UTC";
+  try {
+    new Intl.DateTimeFormat("en-CA", { timeZone: value });
+  } catch {
+    throw new ConfigError(`ETORO_TIMEZONE "${value}" is not a valid IANA time zone (for example UTC or America/Santiago).`);
+  }
+  return value;
 }
 
 /** Everything that touches the outside world when resolving secrets (injectable for tests). */
@@ -247,6 +280,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, io: SecretIo = 
     maxOrderUsd: parseNumber("ETORO_MAX_ORDER_USD", env.ETORO_MAX_ORDER_USD, 100, 1, 1_000_000),
     maxSessionUsd: parseNumber("ETORO_MAX_SESSION_USD", env.ETORO_MAX_SESSION_USD, 500, 1, 10_000_000),
     maxWritesPerMinute: parseNumber("ETORO_MAX_WRITES_PER_MINUTE", env.ETORO_MAX_WRITES_PER_MINUTE, 5, 1, 20),
+    maxDailyUsd: parseNumber("ETORO_MAX_DAILY_USD", env.ETORO_MAX_DAILY_USD, 1000, 1, 100_000_000),
+    maxDailyWrites: parseNumber("ETORO_MAX_DAILY_WRITES", env.ETORO_MAX_DAILY_WRITES, 25, 1, 1000),
+    timezone: parseTimezone(env.ETORO_TIMEZONE),
+    historyPath: parseHistoryPath(env.ETORO_HISTORY_DB),
     confirmTtlMs: parseNumber("ETORO_CONFIRM_TTL_SECONDS", env.ETORO_CONFIRM_TTL_SECONDS, 600, 30, 3600) * 1000,
     requestTimeoutMs: 30_000,
     auditLogPath: expandHome(clean(env.ETORO_AUDIT_LOG)),

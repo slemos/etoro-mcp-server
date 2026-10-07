@@ -655,6 +655,7 @@ describe("environment guard on trading previews", () => {
       ETORO_ENV: "real",
       ETORO_ENABLE_WRITE: "true",
       ETORO_ALLOW_REAL_WRITE: "true",
+      ETORO_HISTORY_DB: "off", // never touch the real history file from a test
     });
     expect(realCfg.strictKeyScope).toBe(true);
     const both = { ...ME, scopes: ["etoro-public:trade.demo:write", "etoro-public:trade.real:write"] };

@@ -28,11 +28,29 @@ const STYLE = `
   pre { white-space: pre-wrap; word-break: break-word; background: rgba(128,128,128,.15); padding: .8rem; border-radius: .4rem; }
 `;
 
-function page(env: string | undefined, title: string, body: string): string {
+/** Extra styles for the history pages, which are wider than the approval page. */
+const WIDE = `
+  body { max-width: 1100px; }
+  .small { font-size: .75rem; padding: .05rem .45rem; }
+  h2 { font-size: 1.05rem; margin: 1.4rem 0 .3rem; }
+  .filters { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: 1rem 0; }
+  .filters input, .filters select { font: inherit; padding: .35rem .5rem; }
+  .filters input[type=search] { flex: 1 1 16rem; }
+  table.list th { width: auto; padding: .4rem .6rem .4rem 0; border-bottom: 1px solid rgba(128,128,128,.4); }
+  table.list td { padding: .45rem .6rem .45rem 0; border-bottom: 1px solid rgba(128,128,128,.2); vertical-align: top; }
+  table.usage th { width: 16rem; }
+  .num { text-align: right; white-space: nowrap; }
+  .nw { white-space: nowrap; }
+  table.list th { white-space: nowrap; }
+  .paging { display: flex; gap: 1.2rem; align-items: center; margin: 1rem 0; }
+  .st { font-weight: 600; } .st.executed { color: #1f7a4d; } .st.failed { color: #b3261e; } .st.rejected, .st.expired { opacity: .6; }
+`;
+
+export function page(env: string | undefined, title: string, body: string, opts: { wide?: boolean } = {}): string {
   const badge = env === undefined ? "" : `<span class="env ${env === "real" ? "real" : "demo"}">${escapeHtml(env.toUpperCase())}</span>\n`;
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(title)}</title><style>${STYLE}</style></head>
+<title>${escapeHtml(title)}</title><style>${STYLE}${opts.wide ? WIDE : ""}</style></head>
 <body>${badge}${body}
 </body></html>`;
 }
