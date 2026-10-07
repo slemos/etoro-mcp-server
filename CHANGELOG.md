@@ -13,7 +13,6 @@ What-if questions on past prices, without placing or preparing anything.
 ### Changed
 - Instrument resolution (symbol or id to one instrument) moved to a shared module used by the prepare tools and the simulations.
 
-## 0.5.1 — unreleased
 ## 0.5.1 — 2026-10-07
 
 Closing positions with more information, and cancelling a close that has not executed yet.
