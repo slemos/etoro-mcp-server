@@ -4,6 +4,7 @@
 
 [![tests](https://img.shields.io/github/actions/workflow/status/slemos/etoro-mcp-server/ci.yml?branch=main&label=tests%20%C2%B7%20build%20%C2%B7%20security%20checks)](https://github.com/slemos/etoro-mcp-server/actions/workflows/ci.yml)
 [![security](https://img.shields.io/github/actions/workflow/status/slemos/etoro-mcp-server/security.yml?branch=main&label=SAST%20%C2%B7%20dependencies%20%C2%B7%20secrets)](https://github.com/slemos/etoro-mcp-server/actions/workflows/security.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/slemos/etoro-mcp-server/badge)](https://scorecard.dev/viewer/?uri=github.com/slemos/etoro-mcp-server)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-339933)](package.json)
 [![MCP](https://img.shields.io/badge/MCP-server-8A2BE2)](https://modelcontextprotocol.io)
@@ -60,6 +61,8 @@ An AI that can touch a brokerage account deserves more scrutiny than most code, 
 | **Dependency audit** (`npm audit`, registry signatures, Dependabot) | The few production dependencies have no known high-severity advisories | same, plus weekly |
 | **Secret scan** (Gitleaks) | No keys or tokens in the repository or its history | same |
 | **Dynamic security checks** (`npm run security:check`) | The *built* server, run as a real process with the network cut off, exposes only the tools each permission switch allows, refuses a non-eToro base URL, rejects hostile arguments before any request, cannot be made to call another API path, and never leaks the keys into results, logs or the audit trail | every CI run and release |
+| **OpenSSF Scorecard** | An independent score of the repository's security practices (protected `main`, pinned actions, least-privilege tokens, static analysis, signed releases, ...), published at scorecard.dev | on every push to `main` and weekly |
+| **Protected `main`** | Nobody, the owner included, can push to `main` directly or rewrite its history: every change goes through a pull request whose CI and security checks must pass | always |
 | **Build provenance + checksums + SBOM** | A release file was built by this repository's workflow from the tagged commit, after everything above passed | every release |
 
 Details and the threat model are in [SECURITY.md](SECURITY.md).

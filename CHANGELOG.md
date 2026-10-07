@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Security and release
+- `main` is protected on GitHub: no direct pushes, force pushes or deletion, for anyone including the owner (administrators are included in the rule); changes go through pull requests that must pass `test (20)`, `test (22)`, `bundle`, `CodeQL (SAST)`, `Dependency audit` and `Secret scan`. Merged branches are deleted.
+- OpenSSF Scorecard workflow (`scorecard.yml`) and README badge.
+
 ## 0.4.0 — 2026-10-06
 
 Market data for natural questions: find an instrument by name and read how its price moved.
