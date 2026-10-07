@@ -8,3 +8,6 @@ server/
 *.log
 .DS_Store
 coverage/
+
+# Local list of names that must never reach the repository (read by scripts/privacy-check.mjs)
+.privacy-denylist

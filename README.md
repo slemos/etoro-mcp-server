@@ -256,7 +256,7 @@ All settings are environment variables (see [`.env.example`](.env.example)). The
 
 ## Tools
 
-17 **read** tools (always available) and 8 **write** tools that only *prepare* (+1 gated transfer tool). Full parameters and the eToro routes they use are in [docs/TOOLS.md](docs/TOOLS.md).
+17 **read** tools (always available) and 9 **write** tools that only *prepare* (+1 gated transfer tool). Full parameters and the eToro routes they use are in [docs/TOOLS.md](docs/TOOLS.md).
 
 | Tool | Kind | Purpose |
 |---|---|---|
@@ -278,17 +278,18 @@ All settings are environment variables (see [`.env.example`](.env.example)). The
 | `etoro_get_action_history` | read | Search the local history (text, ids, dates, environment, action, status) and see today's use of the daily limits |
 | `etoro_open_history` | read | Open a read-only page in your browser to search, filter and export the history |
 | `etoro_prepare_open_position` | write (preview) | Validate + preview an order, open its approval page; returns `actionId` |
-| `etoro_prepare_close_position` | write (preview) | Preview closing all/part of a position |
+| `etoro_prepare_close_position` | write (preview) | Preview closing all/part of a position: instrument, direction, current price, rough result, what stays open |
 | `etoro_prepare_modify_position` | write (preview) | Preview changing the stop loss / take profit of an open position (new rates, trailing, or removing them) |
 | `etoro_prepare_cancel_order` | write (preview) | Preview cancelling a pending order |
+| `etoro_prepare_cancel_close_order` | write (preview) | Preview cancelling a pending close order (the position stays open) |
 | `etoro_prepare_transfer` | write (preview, gated) | Preview an internal transfer (real + opt-in only) |
 | `etoro_prepare_create_watchlist` / `..._add_watchlist_items` / `..._remove_watchlist_items` / `..._delete_watchlist` | write (preview) | Propose watchlist changes (no money involved); you execute them on the page |
 
 ### Example: a guarded order
 
 ```
-You:    Prepare a purchase of 50 USD of CSPX.L as a CFD on my demo account.
-Claude: [etoro_prepare_open_position] → preview: BUY CSPX.L (id 1234) | $50.00 | 1x | cfd | mkt | DEMO,
+You:    Prepare a purchase of 50 USD of AAPL as a CFD on my demo account.
+Claude: [etoro_prepare_open_position] → preview: BUY AAPL (id 1001) | $50.00 | 1x | cfd | mkt | DEMO,
         eligibility, estimated costs, actionId 6b1c…  (nothing sent; your browser opens the approval page)
 You:    (review the page, press Execute)                → the server sends the order to eToro
 Claude: [etoro_get_action_status]     → executed, eToro's orderId
@@ -304,7 +305,7 @@ eToro answers an order with "accepted for processing", not "filled": follow the 
 ```bash
 npm run demo:order -- --symbol AAPL --amount 50                 # buy $50 on demo, keep the position
 npm run demo:order -- --symbol AAPL --amount 50 --close         # ... and close it afterwards (asks again)
-npm run demo:order -- --symbol CSPX.L --amount 20 --settlement cfd
+npm run demo:order -- --symbol AAPL --amount 20 --settlement cfd
 npm run demo:order -- --close-position 123456789                # close an open demo position by id
 npm run demo:order -- --symbol AAPL --amount 50 -y 2>&1 | tee demo-order.log   # no questions, output to a log
 ```
@@ -315,7 +316,7 @@ The script forces `ETORO_ENV=demo` whatever your environment says, stops unless 
 
 - **Very large responses are shortened.** A big portfolio (many positions or copy-trading mirrors) can exceed the output cap; the server then keeps the first N items of each array and says how many there really were. Prefer narrower tools or raise `ETORO_MAX_RESPONSE_CHARS`.
 - **Responses are passed through as eToro sends them.** The shapes come from eToro's reference pages and from a live demo account (see "Where it stands" above); the actions listed there have been tried live and the rest only through tests. If a field is missing or renamed, please open an issue with the (redacted) response shape (`--verbose --mask` in the smoke script produces one that is safe to paste).
-- **`etoro_get_instruments` is an exact lookup** (ticker or id); use `etoro_search_instruments` for names. ETF tickers on eToro carry an exchange suffix such as `CSPX.L`.
+- **`etoro_get_instruments` is an exact lookup** (ticker or id); use `etoro_search_instruments` for names. ETF tickers on eToro carry an exchange suffix such as `EXMPL.L`.
 - **Claude cannot execute, by design.** Claude's own rules keep it from executing financial transactions, so the server never asks it to: it prepares, you press Execute on the approval page. That needs a browser on the same computer (or `ETORO_SHOW_APPROVAL_URL=true` to read the address from the log or result); without a screen, nothing can be executed.
 - **Prepared actions live in memory.** They are forgotten when the server restarts (for example when Claude Desktop restarts it), and expire after `ETORO_CONFIRM_TTL_SECONDS`.
 - Prompt injection is a real risk for any tool-using agent: do not let Claude read untrusted content (web pages, emails, documents) in the same session in which it can prepare real orders, and read the approval page carefully before pressing Execute. If Claude has browser tools, keep `ETORO_SHOW_APPROVAL_URL` off so it never sees the page's address.

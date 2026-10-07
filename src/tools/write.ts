@@ -4,7 +4,8 @@ import { transfersEnabled } from "../config.js";
 import { R } from "../endpoints.js";
 import { type Instrument, asRecord, lookupInstruments, toInstrument } from "../instruments.js";
 import { InputError, PolicyError } from "../errors.js";
-import { offeredSettlements } from "../settlement.js";
+import { estimateClose } from "../closeEstimate.js";
+import { offeredSettlements, settlementOf } from "../settlement.js";
 import { type ToolContext, WRITE, extractList, guarded, ok, explain } from "./common.js";
 
 const id = z.number().int().positive();
@@ -92,7 +93,7 @@ export function registerWriteTools(ctx: ToolContext): void {
         "(some jurisdictions only get CFDs). Some stocks have a separate regular-hours instrument (symbol ending in .RTH) next to the 24/5 one: pass the exact symbol or instrumentId. Leverage above 1, short selling and trailing stops require stopLossRate. " +
         "Order reference: https://api-portal.etoro.com/core/guides/market-orders.md.",
       inputSchema: {
-        symbol: z.string().min(1).max(30).optional().describe("Exact ticker, e.g. 'CSPX.L'. Provide symbol or instrumentId."),
+        symbol: z.string().min(1).max(30).optional().describe("Exact ticker, e.g. 'EXMPL.L'. Provide symbol or instrumentId."),
         instrumentId: id.optional(),
         side: z.enum(["buy", "sellShort"]).describe("'buy' opens a long position; 'sellShort' opens a short (requires stopLossRate)."),
         settlementType: z.enum(["real", "cfd"]).optional().describe("Omit to let eToro apply its default for this instrument."),
@@ -262,42 +263,92 @@ export function registerWriteTools(ctx: ToolContext): void {
     {
       title: "Preview closing an eToro position",
       description:
-        `Previews closing all or part of an open position in the ${envLabel} account. Get positionId and instrumentId from etoro_get_portfolio_breakdown. ` +
-        "Omit unitsToDeduct to close the whole position. Sends nothing to eToro: it registers the action and opens an approval page where the user, and only the user, can execute it; it returns an actionId.",
+        `Previews closing all or part of an open position in the ${envLabel} account. Get positionId from etoro_get_portfolio_breakdown; instrumentId is taken from the open position when omitted. ` +
+        "Omit unitsToDeduct to close the whole position. The preview shows the instrument, direction, current price and a rough estimate of the profit or loss at that price, and refuses to close more units than are open. " +
+        "Sends nothing to eToro: it registers the action and opens an approval page where the user, and only the user, can execute it; it returns an actionId.",
       inputSchema: {
         positionId: id,
-        instrumentId: id,
+        instrumentId: id.optional().describe("Optional: read from the open position. If given, it must match the position's instrument."),
         unitsToDeduct: z.number().positive().optional().describe("Units to close. Omit to close the entire position."),
       },
       annotations: WRITE("Preview closing an eToro position", { destructive: false, idempotent: true }),
     },
-    guarded(async ({ positionId, instrumentId, unitsToDeduct }) => {
+    guarded(async ({ positionId, instrumentId: givenInstrumentId, unitsToDeduct }) => {
       await guard.assertWritable();
       const warnings: string[] = [];
       const breakdown = await bestEffort("Position lookup", warnings, () => client.call(R.portfolioBreakdown(env)));
       const rawPositions = asRecord(asRecord(breakdown).clientPortfolio).positions;
       const positions = Array.isArray(rawPositions) ? rawPositions : [];
       const matched = positions.find((p) => Number(asRecord(p).positionID ?? asRecord(p).positionId) === positionId);
+      const open = asRecord(matched);
       if (breakdown && !matched) {
         warnings.push(`Position ${positionId} was not found among the open positions of the ${env} account.`);
       }
 
+      const positionInstrument = Number(open.instrumentID ?? open.instrumentId);
+      const instrumentId = givenInstrumentId ?? (Number.isInteger(positionInstrument) && positionInstrument > 0 ? positionInstrument : undefined);
+      if (instrumentId === undefined) {
+        throw new InputError("Could not read the position's instrument. Pass instrumentId (see etoro_get_portfolio_breakdown).");
+      }
+      if (matched && Number.isInteger(positionInstrument) && positionInstrument > 0 && givenInstrumentId !== undefined && givenInstrumentId !== positionInstrument) {
+        throw new InputError(`Position ${positionId} is on instrument ${positionInstrument}, not ${givenInstrumentId}. Nothing was prepared.`);
+      }
+      const openUnits = Number(open.units);
+      if (matched && Number.isFinite(openUnits) && unitsToDeduct !== undefined && unitsToDeduct > openUnits * (1 + 1e-9)) {
+        throw new InputError(`Position ${positionId} has ${openUnits} units open; ${unitsToDeduct} cannot be closed. Omit unitsToDeduct to close it all.`);
+      }
+
+      const instrument = (await bestEffort("Instrument lookup", warnings, () => lookupInstruments(client, [instrumentId])))?.get(instrumentId);
+      const rates = await bestEffort("Market rate", warnings, () => client.call(R.rates(), { query: { instrumentIds: [instrumentId] } }));
+      const rate = asRecord(extractList(rates, ["rates"])[0]);
+      const bid = Number(rate.bid);
+      const ask = Number(rate.ask);
+      const isBuy = typeof open.isBuy === "boolean" ? open.isBuy : undefined;
+      const estimate =
+        matched && isBuy !== undefined
+          ? estimateClose({ isBuy, units: openUnits, openRate: Number(open.openRate), closeUnits: unitsToDeduct, bid, ask, amount: Number(open.amount) })
+          : undefined;
+      const settlement = settlementOf(open.settlementTypeID);
+      const mirrorId = Number(open.mirrorID);
+      if (Number.isFinite(mirrorId) && mirrorId > 0) {
+        warnings.push(`This position belongs to a copy trade (mirror ${mirrorId}). Closing it by hand is a separate action from the copy, and eToro may refuse it.`);
+      }
+      if (instrument?.symbol.toUpperCase().endsWith(".RTH")) {
+        warnings.push("This is a regular-trading-hours instrument (.RTH): outside those hours the close waits for the market to open.");
+      }
+      if (estimate && estimate.remainingUnits > 0) {
+        warnings.push(`A partial close: ${estimate.remainingUnits} units stay open (stop loss and take profit are kept by eToro).`);
+      }
+
+      const label = instrument ? `${instrument.symbol}, id ${instrument.instrumentId}` : `instrument ${instrumentId}`;
+      const closing = unitsToDeduct === undefined ? "ENTIRE position" : `${unitsToDeduct} units`;
+      const money = (n: number) => `${n < 0 ? "-" : ""}${usd(Math.abs(n))}`;
       const summary =
-        `CLOSE position ${positionId} (instrument ${instrumentId}) | ${unitsToDeduct === undefined ? "ENTIRE position" : `${unitsToDeduct} units`} | environment ${envLabel}`;
+        `CLOSE position ${positionId} (${label}) | ${closing}` +
+        `${estimate ? ` | est. ${estimate.pnl >= 0 ? "gain" : "loss"} ${money(estimate.pnl)}` : ""} | environment ${envLabel}`;
       // The reference pages spell the body field InstrumentID (demo) and InstrumentId (real).
       const body: Record<string, unknown> = {
         [env === "demo" ? "InstrumentID" : "InstrumentId"]: instrumentId,
         UnitsToDeduct: unitsToDeduct ?? null,
       };
-      const open = asRecord(matched);
       const rows = [
         row("Action", "Close a position"),
         row("Position id", String(positionId)),
-        row("Instrument id", String(instrumentId)),
+        row("Instrument", instrument ? `${instrument.symbol}${instrument.displayName ? `, ${instrument.displayName}` : ""} (id ${instrument.instrumentId})` : `id ${instrumentId}`),
+        ...(isBuy !== undefined ? [row("Direction", isBuy ? "Long (buy)" : "Short (sell)")] : []),
+        ...(settlement ? [row("Settlement", settlement === "cfd" ? "CFD (a contract on the price)" : "Real asset")] : []),
         row("Close", unitsToDeduct === undefined ? "The entire position" : `${unitsToDeduct} units`),
         ...(matched
           ? [
               row("Open position", `${String(open.units ?? "?")} units, opened at ${String(open.openRate ?? "?")}, amount ${String(open.amount ?? "?")}, leverage ${String(open.leverage ?? "?")}x`),
+            ]
+          : []),
+        ...(Number.isFinite(bid) && Number.isFinite(ask) ? [row("Current price", `bid ${bid} / ask ${ask}`)] : []),
+        ...(estimate
+          ? [
+              row("Closing price (estimate)", `${estimate.closeRate} (a ${isBuy ? "long closes at the bid" : "short closes at the ask"})`),
+              row("Estimated result", `${money(estimate.pnl)}${estimate.pnlPercent !== undefined ? ` (${estimate.pnlPercent >= 0 ? "+" : ""}${estimate.pnlPercent.toFixed(2)}% of the amount closed)` : ""}: price move × units, before fees, overnight costs and currency conversion`),
+              ...(estimate.remainingUnits > 0 ? [row("Left open afterwards", `${estimate.remainingUnits} units`)] : []),
             ]
           : []),
       ];
@@ -310,7 +361,13 @@ export function registerWriteTools(ctx: ToolContext): void {
         refs: { positionId, instrumentId },
         run: ({ requestId, grant }) => client.call(R.closePosition(env, positionId), { body, requestId, grant }),
       });
-      return ok({ ...(await announce(ctx, proposal)), matchedPosition: matched ?? null, warnings });
+      return ok({
+        ...(await announce(ctx, proposal)),
+        instrument: instrument ?? null,
+        estimate: estimate ?? null,
+        matchedPosition: matched ?? null,
+        warnings,
+      });
     }),
   );
 
@@ -427,7 +484,7 @@ export function registerWriteTools(ctx: ToolContext): void {
     {
       title: "Preview cancelling an eToro order",
       description:
-        `Previews cancelling a pending (not yet executed) order in the ${envLabel} account. Sends nothing to eToro: it registers the action and opens an approval page where the user, and only the user, can execute it; it returns an actionId.`,
+        `Previews cancelling a pending (not yet executed) order in the ${envLabel} account. To cancel a pending CLOSE order, use etoro_prepare_cancel_close_order. Sends nothing to eToro: it registers the action and opens an approval page where the user, and only the user, can execute it; it returns an actionId.`,
       inputSchema: { orderId: id },
       annotations: WRITE("Preview cancelling an eToro order", { destructive: false, idempotent: true }),
     },
@@ -445,6 +502,40 @@ export function registerWriteTools(ctx: ToolContext): void {
         exposureUsd: 0,
         refs: { orderId },
         run: ({ requestId, grant }) => client.call(R.cancelOrder(env, orderId), { requestId, grant }),
+      });
+      return ok({ ...(await announce(ctx, proposal)), order: order ?? null, warnings });
+    }),
+  );
+
+  // ---------------------------------------------------------- cancel close
+  mcp.registerTool(
+    "etoro_prepare_cancel_close_order",
+    {
+      title: "Preview cancelling a pending close order",
+      description:
+        `Previews cancelling a pending close order (a request to close a position that has not executed yet, for example one waiting for the market to open) in the ${envLabel} account. ` +
+        "The position stays open. Use the orderId that came back when the close was executed (see etoro_get_action_status); for other pending orders use etoro_prepare_cancel_order. " +
+        "Sends nothing to eToro: it registers the action and opens an approval page where the user, and only the user, can execute it; it returns an actionId. eToro's 200 only confirms the request was received: check the order afterwards with etoro_get_order.",
+      inputSchema: { orderId: id },
+      annotations: WRITE("Preview cancelling a pending close order", { destructive: false, idempotent: true }),
+    },
+    guarded(async ({ orderId }) => {
+      await guard.assertWritable();
+      const warnings: string[] = [];
+      const order = await bestEffort("Order lookup", warnings, () => client.call(R.orderLookup(env), { query: { orderId } }));
+      const status = asRecord(asRecord(order).status);
+      if (typeof status.name === "string" && /filled|cancel|reject/i.test(status.name)) {
+        warnings.push(`The order's current status is ${status.name}: there may be nothing left to cancel.`);
+      }
+      const summary = `CANCEL CLOSE order ${orderId} | the position stays open | environment ${envLabel}`;
+      const proposal = store.create({
+        tool: "cancel_close_order",
+        summary,
+        rows: [row("Action", "Cancel a pending close order"), row("Order id", String(orderId)), ...(status.name ? [row("Current status", String(status.name))] : []), row("Effect", "The position stays open")],
+        warnings,
+        exposureUsd: 0,
+        refs: { orderId },
+        run: ({ requestId, grant }) => client.call(R.cancelCloseOrder(env, orderId), { requestId, grant }),
       });
       return ok({ ...(await announce(ctx, proposal)), order: order ?? null, warnings });
     }),

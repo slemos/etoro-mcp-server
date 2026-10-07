@@ -301,10 +301,10 @@ export function registerReadTools({ mcp, cfg, client, store }: ToolContext): voi
       title: "Find eToro instruments",
       description:
         "Look up instruments by exact ticker symbols or by instrument ids, or list by type. Returns instrumentId, symbol, displayName, type and exchangeId. " +
-        "This is an exact lookup; for a name or partial text (for example 'apple') use etoro_search_instruments. ETF listings use exchange suffixes (for example CSPX.L). " +
+        "This is an exact lookup; for a name or partial text (for example 'apple') use etoro_search_instruments. ETF listings use exchange suffixes (for example EXMPL.L). " +
         "Provide symbols or instrumentIds, not both.",
       inputSchema: {
-        symbols: z.array(z.string().min(1).max(30)).max(50).optional().describe("Exact tickers, e.g. ['AAPL', 'CSPX.L']."),
+        symbols: z.array(z.string().min(1).max(30)).max(50).optional().describe("Exact tickers, e.g. ['AAPL', 'EXMPL.L']."),
         instrumentIds: z.array(id).max(100).optional(),
         type: z
           .enum(["Forex", "Commodity", "CFD", "Indices", "Stocks", "ETF", "Bonds", "TrustFunds", "Options", "Crypto"])
@@ -328,7 +328,7 @@ export function registerReadTools({ mcp, cfg, client, store }: ToolContext): voi
     {
       title: "Search eToro instruments by text",
       description:
-        "Free-text search of instruments by name or ticker (for example 'apple', 'S&P 500', 'CSPX'). Returns up to `limit` matches with instrumentId, symbol, displayName, type and exchangeId, without images. " +
+        "Free-text search of instruments by name or ticker (for example 'apple', 'S&P 500', 'EXMPL'). Returns up to `limit` matches with instrumentId, symbol, displayName, type and exchangeId, without images. " +
         "Some stocks appear twice: the plain ticker is the 24/5 instrument and a symbol ending in .RTH is the regular-trading-hours one. " +
         "Use the instrumentId or the exact symbol with the other tools.",
       inputSchema: {

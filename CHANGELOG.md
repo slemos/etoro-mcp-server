@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.1 — unreleased
+
+Closing positions with more information, and cancelling a close that has not executed yet.
+
+### Added
+- `etoro_prepare_cancel_close_order`: cancels a pending close order (a close waiting for the market to open, for example). The position stays open. It is a separate eToro endpoint from cancelling a normal order (`DELETE /api/v1/trading/execution/market-close-orders/{orderId}`, demo: `/execution/demo/market-close-orders/{orderId}`, taken from the reference pages), so `etoro_prepare_cancel_order` now points to it. eToro's answer only confirms the request arrived; the preview says to check the order afterwards.
+- `npm run privacy:check` (also in CI): fails on e-mail addresses and real-looking long ids in tracked files, and on any phrase in a local, git-ignored `.privacy-denylist`. Numbers that are invented on purpose are listed in `scripts/privacy-allowlist.txt`. Tests: 205.
+
+### Changed
+- `etoro_prepare_close_position` shows the instrument, direction, settlement, current bid/ask and a rough result of the close (price move × units; a long closes at the bid, a short at the ask; before fees, overnight costs and currency conversion) and, for a partial close, what stays open. `instrumentId` is optional now: it is read from the open position, and the preview refuses a mismatching one or more units than are open. It warns about positions that belong to a copy and about `.RTH` instruments.
+- The example ticker in the documentation, tests and tool descriptions is now neutral (`AAPL` or the made-up `EXMPL.L`).
+
 ## 0.5.0 — 2026-10-07
 
 A record of what you did, and daily limits that survive restarts.

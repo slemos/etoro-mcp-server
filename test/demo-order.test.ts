@@ -45,7 +45,7 @@ async function run(handler: Handler, opts: Partial<DemoOrderOptions>, answers: b
       log: (l) => lines.push(l),
       sleep: async () => {},
     },
-    { amountUsd: 50, pollMs: 0, ...opts, symbol: opts.symbol ?? "CSPX.L" },
+    { amountUsd: 50, pollMs: 0, ...opts, symbol: opts.symbol ?? "EXMPL.L" },
   );
   return { ...ctx, result, lines, questions, orderPosts: ctx.calls.filter((c) => c.method === "POST" && c.path.endsWith("/orders")) };
 }
@@ -65,7 +65,7 @@ describe("demo order script flow", () => {
         log: (l) => lines.push(l),
         sleep: async () => {},
       },
-      { amountUsd: 50, pollMs: 0, symbol: "CSPX.L" },
+      { amountUsd: 50, pollMs: 0, symbol: "EXMPL.L" },
     );
     expect(result).toMatchObject({ ok: true, stage: "executed", orderId: 99 });
     expect(ctx.calls.filter((c) => c.method === "POST" && c.path.endsWith("/orders"))).toHaveLength(1);
@@ -86,7 +86,7 @@ describe("demo order script flow", () => {
         log: (l) => lines.push(l),
         sleep: async () => {},
       },
-      { amountUsd: 50, pollMs: 0, symbol: "CSPX.L" },
+      { amountUsd: 50, pollMs: 0, symbol: "EXMPL.L" },
     );
     expect(result).toMatchObject({ ok: false, stage: "execute" });
     expect(lines.join("\n")).toContain("ETORO_SHOW_APPROVAL_URL");
@@ -170,7 +170,7 @@ describe("order follow-up details", () => {
     const { lines, close } = await run(lifecycle(), {});
     const out = lines.join("\n");
     expect(out).toContain("Execution details:");
-    expect(out).toContain("In your portfolio: CSPX.L");
+    expect(out).toContain("In your portfolio: EXMPL.L");
     expect(out).toContain("settlementTypeID 1 | isSettled true");
     await close();
   });
@@ -268,8 +268,8 @@ describe("command line", () => {
   });
 
   it("reads option values and flags", () => {
-    const cli = parseCli(["--symbol", "CSPX.L", "--amount", "20", "--close", "-y"]);
-    expect(cli.value("symbol")).toBe("CSPX.L");
+    const cli = parseCli(["--symbol", "EXMPL.L", "--amount", "20", "--close", "-y"]);
+    expect(cli.value("symbol")).toBe("EXMPL.L");
     expect(cli.value("amount")).toBe("20");
     expect(cli.value("settlement")).toBeUndefined();
     expect(cli.flag("close")).toBe(true);

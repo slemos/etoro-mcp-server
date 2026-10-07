@@ -25,6 +25,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      # No personal data in this public repository: e-mail addresses and real-looking ids (see scripts/privacy-check.mjs).
+      - run: npm run privacy:check
       - run: npm test
       - run: npm run build
       - run: node scripts/smoke.mjs

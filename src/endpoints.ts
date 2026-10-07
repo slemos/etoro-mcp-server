@@ -105,6 +105,16 @@ export const R = {
         ? `/api/v1/trading/execution/demo/market-close-orders/positions/${id(positionId)}`
         : `/api/v1/trading/execution/market-close-orders/positions/${id(positionId)}`,
     ),
+  /** Cancels a pending market-close order (a close request that has not executed yet); the position stays open. */
+  cancelCloseOrder: (env: EtoroEnv, orderId: number) =>
+    route(
+      "cancelCloseOrder",
+      "write",
+      "DELETE",
+      env === "demo"
+        ? `/api/v1/trading/execution/demo/market-close-orders/${id(orderId)}`
+        : `/api/v1/trading/execution/market-close-orders/${id(orderId)}`,
+    ),
   modifyPosition: (env: EtoroEnv, positionId: number) =>
     route(
       "modifyPosition",

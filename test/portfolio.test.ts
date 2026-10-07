@@ -130,7 +130,7 @@ describe("portfolio tools", () => {
     if (call.path === "/api/v1/trading/info/demo/portfolio" || call.path === "/api/v1/trading/info/demo/pnl") return { json: portfolio(3000) };
     if (call.path === "/api/v2/market-data/instruments") {
       const ids = (call.query.instrumentsIds ?? "").split(",").map(Number);
-      return { json: { items: ids.filter((i) => i === 1234).map((instrumentId) => ({ instrumentId, symbol: "CSPX.L", displayName: "iShares Core S&P 500" })) } };
+      return { json: { items: ids.filter((i) => i === 1234).map((instrumentId) => ({ instrumentId, symbol: "EXMPL.L", displayName: "Example Index ETF" })) } };
     }
     return undefined;
   };
@@ -139,7 +139,7 @@ describe("portfolio tools", () => {
     const { client, calls, close } = await connect(baseCfg(), orderHandler(handler));
     const res = await client.callTool({ name: "etoro_get_portfolio_breakdown", arguments: {} });
     const out = JSON.parse(textOf(res));
-    expect(out.positions.items[0].symbol).toBe("CSPX.L");
+    expect(out.positions.items[0].symbol).toBe("EXMPL.L");
     expect(out.mirrors[0].positionsCount).toBe(3000);
     expect(textOf(res).length).toBeLessThan(4000);
     expect(calls.filter((c) => c.path === "/api/v2/market-data/instruments")).toHaveLength(1);
@@ -161,7 +161,7 @@ describe("portfolio tools", () => {
     const out = JSON.parse(textOf(await client.callTool({ name: "etoro_get_portfolio_breakdown", arguments: { view: "mirror", mirrorId: 77, limit: 10, offset: 5 } })));
     expect(out.positions.items).toHaveLength(10);
     expect(out.positions.items[0].positionID).toBe(1005);
-    expect(out.positions.items[0].symbol).toBe("CSPX.L");
+    expect(out.positions.items[0].symbol).toBe("EXMPL.L");
     await close();
   });
 
