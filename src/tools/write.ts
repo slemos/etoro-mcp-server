@@ -4,6 +4,7 @@ import { transfersEnabled } from "../config.js";
 import { R } from "../endpoints.js";
 import { asRecord, lookupInstruments, resolveInstrument } from "../instruments.js";
 import { InputError, PolicyError } from "../errors.js";
+import { type AlertView, directionOf, distancePct, projectAlerts, targetWarnings } from "../alerts.js";
 import { estimateClose } from "../closeEstimate.js";
 import { offeredSettlements, requiresW8Ben, settlementOf } from "../settlement.js";
 import { type ToolContext, WRITE, extractList, guarded, ok, explain } from "./common.js";
@@ -595,6 +596,113 @@ export function registerWriteTools(ctx: ToolContext): void {
     const found = await lookupInstruments(client, instrumentIds);
     return instrumentIds.map((n) => (found.get(n) ? `${found.get(n)!.symbol} (id ${n})` : `id ${n}`)).join(", ");
   };
+
+  // ----------------------------------------------------------- price alerts
+  const alertEnv = "account-level (alerts do not belong to demo or real)";
+  const alertId = z.string().uuid();
+
+  /** The user's alert with this id, from their active alerts; undefined if the list could not be read or has no such alert. */
+  async function findAlert(wanted: string, warnings: string[]): Promise<AlertView | undefined> {
+    const list = await bestEffort("Price alert lookup", warnings, () => client.call(R.priceAlerts()));
+    if (list === undefined) return undefined;
+    const found = projectAlerts(list).find((a) => a.alertId === wanted);
+    if (!found) throw new InputError(`No active price alert has the id ${wanted}. List them with etoro_list_price_alerts. Nothing was prepared.`);
+    return found;
+  }
+
+  const alertRows = (symbolText: string, target: number, price: number | undefined): ProposalRow[] => [
+    row("Instrument", symbolText),
+    row("Target price", String(target)),
+    ...(price !== undefined ? [row("Current bid", String(price)), row("Fires when the price", `${directionOf(target, price) === "falls_to" ? "falls to" : directionOf(target, price) === "rises_to" ? "rises to" : "is at"} the target (${distancePct(target, price) ?? "?"}% from now)`)] : []),
+    row("Effect", "Notifies you; it places no order and moves no money"),
+  ];
+
+  mcp.registerTool(
+    "etoro_prepare_create_price_alert",
+    {
+      title: "Preview creating an eToro price alert",
+      description:
+        "Previews creating a price alert: eToro notifies the user when the instrument reaches the target price. It places no order and moves no money. Needs the key's price-alerts Write permission. " +
+        "The preview shows the instrument, the current bid, which way the price must move and how far, and warns about a target that looks like a typo. " +
+        "Sends nothing to eToro: it registers the action and opens an approval page where the user, and only the user, can execute it; it returns an actionId.",
+      inputSchema: {
+        symbol: z.string().min(1).max(30).describe("Exact ticker, e.g. 'AAPL'."),
+        targetPrice: z.number().positive().describe("Price (not a percentage) at which the alert should fire."),
+      },
+      annotations: WRITE("Preview creating an eToro price alert", { destructive: false, idempotent: false }),
+    },
+    guarded(async ({ symbol, targetPrice }) => {
+      const warnings: string[] = [];
+      const instrument = await resolveInstrument(client, symbol, undefined);
+      const rates = await bestEffort("Market rate", warnings, () => client.call(R.rates(), { query: { instrumentIds: [instrument.instrumentId] } }));
+      const bid = Number(asRecord(extractList(rates, ["rates"])[0]).bid);
+      const price = Number.isFinite(bid) ? bid : undefined;
+      if (price !== undefined) warnings.push(...targetWarnings(targetPrice, price));
+      const label = `${instrument.symbol}${instrument.displayName ? `, ${instrument.displayName}` : ""} (id ${instrument.instrumentId})`;
+      const proposal = store.create({
+        tool: "create_price_alert",
+        summary: `CREATE price alert on ${instrument.symbol} at ${targetPrice}${price !== undefined ? ` (now ${price})` : ""} | ${alertEnv}`,
+        rows: [row("Action", "Create a price alert"), ...alertRows(label, targetPrice, price)],
+        warnings,
+        exposureUsd: 0,
+        refs: { instrumentId: instrument.instrumentId },
+        run: ({ requestId, grant }) => client.call(R.createPriceAlert(), { body: { symbol: instrument.symbol, targetPrice }, requestId, grant }),
+      });
+      return ok({ ...(await announce(ctx, proposal)), instrument, currentBid: price ?? null, warnings });
+    }),
+  );
+
+  mcp.registerTool(
+    "etoro_prepare_update_price_alert",
+    {
+      title: "Preview changing the target of an eToro price alert",
+      description:
+        "Previews changing the target price of an existing price alert (alertId from etoro_list_price_alerts). The preview shows the old and the new target. " +
+        "Sends nothing to eToro: it registers the action and opens an approval page where the user, and only the user, can execute it; it returns an actionId.",
+      inputSchema: { alertId, targetPrice: z.number().positive() },
+      annotations: WRITE("Preview changing the target of an eToro price alert", { destructive: false, idempotent: true }),
+    },
+    guarded(async ({ alertId: wanted, targetPrice }) => {
+      const warnings: string[] = [];
+      const current = await findAlert(wanted, warnings);
+      const symbolText = current?.symbol || "the alert's instrument";
+      if (current?.priceWhenSet !== undefined) warnings.push(...targetWarnings(targetPrice, current.priceWhenSet));
+      const proposal = store.create({
+        tool: "update_price_alert",
+        summary: `CHANGE price alert ${wanted} on ${symbolText}${current ? ` from ${current.targetPrice}` : ""} to ${targetPrice} | ${alertEnv}`,
+        rows: [row("Action", "Change a price alert's target"), row("Alert id", wanted), ...(current ? [row("Old target", String(current.targetPrice))] : []), ...alertRows(symbolText, targetPrice, current?.priceWhenSet).filter((r) => r.label !== "Current bid")],
+        warnings,
+        exposureUsd: 0,
+        run: ({ requestId, grant }) => client.call(R.updatePriceAlert(wanted), { body: { targetPrice }, requestId, grant }),
+      });
+      return ok({ ...(await announce(ctx, proposal)), currentAlert: current ?? null, warnings });
+    }),
+  );
+
+  mcp.registerTool(
+    "etoro_prepare_delete_price_alert",
+    {
+      title: "Preview deleting an eToro price alert",
+      description:
+        "Previews permanently deleting a price alert (alertId from etoro_list_price_alerts). " +
+        "Sends nothing to eToro: it registers the action and opens an approval page where the user, and only the user, can execute it; it returns an actionId.",
+      inputSchema: { alertId },
+      annotations: WRITE("Preview deleting an eToro price alert", { destructive: true, idempotent: true }),
+    },
+    guarded(async ({ alertId: wanted }) => {
+      const warnings: string[] = [];
+      const current = await findAlert(wanted, warnings);
+      const proposal = store.create({
+        tool: "delete_price_alert",
+        summary: `DELETE price alert ${wanted}${current ? ` on ${current.symbol} at ${current.targetPrice}` : ""} | ${alertEnv}`,
+        rows: [row("Action", "Delete a price alert"), row("Alert id", wanted), ...(current ? [row("Instrument", current.symbol), row("Target price", String(current.targetPrice))] : []), row("Effect", "The alert is removed for good; you can create it again")],
+        warnings,
+        exposureUsd: 0,
+        run: ({ requestId, grant }) => client.call(R.deletePriceAlert(wanted), { requestId, grant }),
+      });
+      return ok({ ...(await announce(ctx, proposal)), currentAlert: current ?? null, warnings });
+    }),
+  );
 
   mcp.registerTool(
     "etoro_prepare_create_watchlist",

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.0 — unreleased
+
+Price alerts, with the same rule as everything else that changes something: Claude prepares, you execute.
+
+### Added
+- `etoro_list_price_alerts` (read-only): your active alerts, each with the bid when it was set, which way the price has to move to reach the target and how far, in percent.
+- `etoro_prepare_create_price_alert`, `etoro_prepare_update_price_alert` and `etoro_prepare_delete_price_alert`: an alert notifies you when an instrument reaches a price; it places no order and moves no money. The create preview shows the instrument, the current bid and a warning when the target is almost the current price or looks like a typo (more than 5 times above or under a fifth). Update and delete first check the alert among your active ones and show what changes. Routes (from eToro's OpenAPI specification): `GET`/`POST /api/v1/price-alerts`, `PATCH`/`DELETE /api/v1/price-alerts/{alertId}`.
+- The alerts need the key's price-alerts permission (Read to list, Write to change). They were written from the specification and the tests, and **not** tried live: the key in use when they were built has no price-alerts permission.
+- Tests: 247.
+
 ## 0.7.0 — 2026-10-07
 
 See more: other investors' public data, your balance history and cash movements, clearer previews, and a weekly check of every route.

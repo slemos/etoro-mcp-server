@@ -6,6 +6,7 @@ import { summarizeCandles } from "../candles.js";
 import { asRecord, lookupInstruments } from "../instruments.js";
 import { type View, compactPortfolio } from "../portfolio.js";
 import { InputError } from "../errors.js";
+import { projectAlerts } from "../alerts.js";
 import { probeRuntime } from "../runtime.js";
 import { SERVER_NAME, VERSION } from "../version.js";
 import { type ToolContext, READ, explain, extractList, fail, guarded, ok } from "./common.js";
@@ -457,6 +458,22 @@ export function registerReadTools({ mcp, cfg, client, store }: ToolContext): voi
           },
         }),
       );
+    }),
+  );
+
+  mcp.registerTool(
+    "etoro_list_price_alerts",
+    {
+      title: "List eToro price alerts",
+      description:
+        "The user's active price alerts: instrument, target price, the bid when the alert was set, which way the price has to move to reach the target and how far it is, in percent. " +
+        "Alerts belong to the account, not to demo or real. Needs the key's price-alerts Read permission. Read-only.",
+      inputSchema: {},
+      annotations: READ("List eToro price alerts"),
+    },
+    guarded(async () => {
+      const alerts = projectAlerts(await client.call(R.priceAlerts()));
+      return ok({ count: alerts.length, alerts });
     }),
   );
 
