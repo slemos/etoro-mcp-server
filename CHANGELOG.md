@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.7.0 — unreleased
+## 0.7.0 — 2026-10-07
 
 See more: other investors' public data, your balance history and cash movements, clearer previews, and a weekly check of every route.
 
