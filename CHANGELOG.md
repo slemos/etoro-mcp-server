@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.0 — unreleased
+## 0.5.0 — 2026-10-07
 
 A record of what you did, and daily limits that survive restarts.
 
