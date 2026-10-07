@@ -1,6 +1,6 @@
 {
   "name": "etoro-mcp-server",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Unofficial MCP server for the eToro Public API: read your portfolio and market data, and (opt-in) place orders with preview, cost check and human confirmation. Demo-first and read-only by default.",
   "repository": {
     "type": "git",

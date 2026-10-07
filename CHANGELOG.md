@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1 — unreleased
+
+- Version bump after publishing 0.3.0, so Claude Desktop offers the update over an installed 0.3.0. No functional changes yet; fixes found while trying `etoro_prepare_modify_position` in Claude Desktop will land here.
+
 ## 0.3.0 — 2026-10-06
 
 **Claude proposes, you execute.** Claude's own rules keep it from executing financial transactions (it refused to call `etoro_confirm_action` even on a demo account, and said so), so the server no longer asks it to: every change is only *prepared* by Claude and executed by you, on a local approval page. This is a breaking change.
