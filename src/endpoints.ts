@@ -74,6 +74,8 @@ export const R = {
   balances: () => route("balances", "read", "GET", "/api/v1/balances"),
   instruments: () => route("instruments", "read", "GET", "/api/v2/market-data/instruments"),
   rates: () => route("rates", "read", "GET", "/api/v1/market-data/instruments/rates"),
+  instrumentSearch: () => route("instrumentSearch", "read", "GET", "/api/v2/market-data/instruments/search"),
+  candles: (instrumentId: number) => route("candles", "read", "GET", `/api/v1/data/instruments/${id(instrumentId)}/candles`),
   watchlists: () => route("watchlists", "read", "GET", "/api/v1/watchlists"),
 
   // ---- Write: trading -----------------------------------------------------

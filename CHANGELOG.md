@@ -1,8 +1,14 @@
 # Changelog
 
-## 0.3.1 — unreleased
+## 0.4.0 — unreleased
 
-- Version bump after publishing 0.3.0, so Claude Desktop offers the update over an installed 0.3.0. No functional changes yet; fixes found while trying `etoro_prepare_modify_position` in Claude Desktop will land here.
+Market data for natural questions: find an instrument by name and read how its price moved.
+
+### Added
+- `etoro_search_instruments`: free-text search by name or ticker (`GET /api/v2/market-data/instruments/search`), compact rows without images. `etoro_get_instruments` stays the exact lookup and now points to it.
+- `etoro_get_candles`: historical candles for one instrument (`GET /api/v1/data/instruments/{id}/candles`): interval from 1m to 1w, optional `from`/`to` window (ISO 8601 with a timezone), up to 2000 per call with `cursor` paging, bid/ask/both. The answer includes a `summary` (first open, last close, high, low, percentage change, volume) computed from the candles returned, and `summaryOnly` returns just that.
+- `npm run pack:dev`: a throwaway `.mcpb` versioned `<version>-dev.<n>` for trying changes in Claude Desktop, which only offers updates to higher versions, without spending release numbers.
+- Tests: 160.
 
 ## 0.3.0 — 2026-10-06
 

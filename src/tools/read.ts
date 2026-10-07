@@ -2,11 +2,12 @@ import { z } from "zod";
 import { transfersEnabled, writeEnabled } from "../config.js";
 import { R } from "../endpoints.js";
 import { fetchIdentity, fetchSnapshotCid, ownerOfCid, scopesByEnvironment, type Identity } from "../environment.js";
-import { lookupInstruments } from "../instruments.js";
+import { summarizeCandles } from "../candles.js";
+import { asRecord, lookupInstruments } from "../instruments.js";
 import { type View, compactPortfolio } from "../portfolio.js";
 import { InputError } from "../errors.js";
 import { SERVER_NAME, VERSION } from "../version.js";
-import { type ToolContext, READ, explain, fail, guarded, ok } from "./common.js";
+import { type ToolContext, READ, explain, extractList, fail, guarded, ok } from "./common.js";
 
 const id = z.number().int().positive();
 const DOCS = "https://api-portal.etoro.com";
@@ -290,7 +291,7 @@ export function registerReadTools({ mcp, cfg, client, store }: ToolContext): voi
       title: "Find eToro instruments",
       description:
         "Look up instruments by exact ticker symbols or by instrument ids, or list by type. Returns instrumentId, symbol, displayName, type and exchangeId. " +
-        "Free-text name search is not supported; ETF listings use exchange suffixes (for example CSPX.L). " +
+        "This is an exact lookup; for a name or partial text (for example 'apple') use etoro_search_instruments. ETF listings use exchange suffixes (for example CSPX.L). " +
         "Provide symbols or instrumentIds, not both.",
       inputSchema: {
         symbols: z.array(z.string().min(1).max(30)).max(50).optional().describe("Exact tickers, e.g. ['AAPL', 'CSPX.L']."),
@@ -309,6 +310,70 @@ export function registerReadTools({ mcp, cfg, client, store }: ToolContext): voi
       return ok(
         await client.call(R.instruments(), { query: { symbols, instrumentsIds: instrumentIds, type, pageSize } }),
       );
+    }),
+  );
+
+  mcp.registerTool(
+    "etoro_search_instruments",
+    {
+      title: "Search eToro instruments by text",
+      description:
+        "Free-text search of instruments by name or ticker (for example 'apple', 'S&P 500', 'CSPX'). Returns up to `limit` matches with instrumentId, symbol, displayName, type and exchangeId, without images. " +
+        "Some stocks appear twice: the plain ticker is the 24/5 instrument and a symbol ending in .RTH is the regular-trading-hours one. " +
+        "Use the instrumentId or the exact symbol with the other tools.",
+      inputSchema: {
+        query: z.string().min(1).max(100).describe("Text to search for."),
+        limit: z.number().int().min(1).max(50).default(10),
+      },
+      annotations: READ("Search eToro instruments by text"),
+    },
+    guarded(async ({ query, limit }) => {
+      const response = await client.call(R.instrumentSearch(), { query: { query, limit } });
+      const results = extractList(response, ["results", "items", "instruments", "data"]).map((raw) => {
+        const r = asRecord(raw);
+        return { instrumentId: r.instrumentId, symbol: r.symbol, displayName: r.displayName, type: r.type, exchangeId: r.exchangeId };
+      });
+      return ok({ query, count: results.length, results });
+    }),
+  );
+
+  mcp.registerTool(
+    "etoro_get_candles",
+    {
+      title: "Get eToro price candles",
+      description:
+        "Historical price candles (open, high, low, close, volume) for one instrument, from eToro's market data. Choose the interval (1m to 1w) and optionally a window with from and to (ISO 8601 with a timezone); " +
+        "without them eToro returns the latest `limit` candles. The result includes a `summary` (first open, last close, high, low, percentage change, volume) computed from the candles returned, " +
+        "so a long series does not need to be read row by row; set summaryOnly to return just that. A window can be longer than `limit`: when `pagination.hasNext` is true, call again with its nextCursor. " +
+        "Prices are eToro's quotes (bid by default), not necessarily the underlying venue's. Past performance is not a forecast.",
+      inputSchema: {
+        instrumentId: id,
+        interval: z.enum(["1m", "5m", "10m", "15m", "30m", "1h", "4h", "1d", "1w"]).default("1d"),
+        from: z.string().datetime({ offset: true }).optional().describe("Inclusive start, ISO 8601 with timezone, e.g. 2026-01-01T00:00:00Z."),
+        to: z.string().datetime({ offset: true }).optional().describe("Exclusive end, ISO 8601 with timezone."),
+        limit: z.number().int().min(1).max(2000).default(100),
+        side: z.enum(["bid", "ask", "both"]).default("bid"),
+        cursor: z.string().min(1).max(500).optional().describe("The nextCursor of a previous answer."),
+        summaryOnly: z.boolean().default(false).describe("Return only the summary and the pagination, without the candles."),
+      },
+      annotations: READ("Get eToro price candles"),
+    },
+    guarded(async ({ instrumentId, interval, from, to, limit, side, cursor, summaryOnly }) => {
+      if (from !== undefined && to !== undefined && Date.parse(from) >= Date.parse(to)) {
+        throw new InputError("from must be earlier than to.");
+      }
+      const response = asRecord(await client.call(R.candles(instrumentId), { query: { interval, from, to, limit, side, cursor } }));
+      const results = Array.isArray(response.results) ? response.results : [];
+      return ok({
+        instrumentId: response.instrumentId ?? instrumentId,
+        symbol: response.symbol,
+        interval: response.interval ?? interval,
+        side: response.side ?? side,
+        window: response.window,
+        pagination: response.pagination,
+        summary: summarizeCandles(results) ?? null,
+        ...(summaryOnly ? {} : { results }),
+      });
     }),
   );
 

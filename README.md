@@ -20,11 +20,12 @@
 | *"How are the traders I copy performing?"* | One compact summary per copied trader, with their positions available on request. |
 | *"What would it cost to buy 50 dollars of AAPL, and can my account even do that?"* | Live price, the settlement types and leverage your account is offered, and an estimate of the fees. |
 | *"Show my closed trades since January."* | Your trade history, filtered by date. |
+| *"Find the Apple instrument and tell me how it did over the last year."* | Searches by name, then reads the price candles and summarises them (first open, last close, high, low, change). |
 | *"Prepare a purchase of 20 dollars of AAPL on my demo account."* | Claude **prepares** the order (instrument, size, costs, environment) and your browser opens an approval page with the exact action. **You** press Execute there; Claude cannot. Then it follows the order. |
 | *"Prepare closing that position."* / *"Add a stop loss at 780 to it."* / *"Prepare cancelling that pending order."* | Same: Claude proposes, you execute on the page. |
 | *"Add these instruments to my Tech watchlist."* | Creates and edits watchlists (no money involved). |
 
-13 read tools, 8 prepare-only write tools and one gated transfer tool; see [Tools](#tools).
+15 read tools, 8 prepare-only write tools and one gated transfer tool; see [Tools](#tools).
 
 **Safe by default.** It starts **read-only and on eToro's demo environment**. The tools that can move money are not even registered until you switch them on, real money needs a second switch, and Claude can only *prepare* an action: **you execute it yourself on a local approval page**, never Claude. Size caps, a rate limit and an audit log apply on top. Your keys stay on your machine (OS keychain, password manager or a protected file) and are never shown to Claude. Details in the [safety model](#safety-model).
 
@@ -237,7 +238,7 @@ All settings are environment variables (see [`.env.example`](.env.example)). The
 
 ## Tools
 
-13 **read** tools (always available) and 8 **write** tools that only *prepare* (+1 gated transfer tool). Full parameters and the eToro routes they use are in [docs/TOOLS.md](docs/TOOLS.md).
+15 **read** tools (always available) and 8 **write** tools that only *prepare* (+1 gated transfer tool). Full parameters and the eToro routes they use are in [docs/TOOLS.md](docs/TOOLS.md).
 
 | Tool | Kind | Purpose |
 |---|---|---|
@@ -248,7 +249,9 @@ All settings are environment variables (see [`.env.example`](.env.example)). The
 | `etoro_get_balances` | read | Balances across your eToro accounts |
 | `etoro_get_trade_history` | read | Closed trades since a date |
 | `etoro_get_order` | read | Status of one order |
-| `etoro_get_instruments` | read | Resolve tickers / ids to instruments |
+| `etoro_get_instruments` | read | Resolve exact tickers / ids to instruments |
+| `etoro_search_instruments` | read | Find instruments by name or partial text ("apple", "S&P 500") |
+| `etoro_get_candles` | read | Historical price candles (1m to 1w) for a window, with a summary: first open, last close, high, low, % change, volume |
 | `etoro_get_rates` | read | Bid/ask for instruments |
 | `etoro_check_eligibility` | read | Settlement types, leverage, limits per instrument |
 | `etoro_get_trading_costs` | read | What-if cost breakdown for an order |
@@ -311,6 +314,7 @@ npm run build            # tsc → dist/
 node scripts/smoke.mjs   # launch the built server over stdio and list tools (dummy keys)
 npm run security:check   # runs the built server with the network cut off: permission switches, hostile inputs, secret redaction
 npm run mcpb:pack        # esbuild bundle → server/index.js, then etoro-mcp-server.mcpb
+npm run pack:dev         # throwaway etoro-mcp-server-dev.mcpb, versioned <version>-dev.<n>, to try changes in Claude Desktop
 ```
 
 With your own keys in a git-ignored `.env`, `npm run smoke:live` (or `node scripts/smoke.mjs --live` with the variables exported) runs `etoro_check_connection` and a few read tools and prints only the *shape* of the responses (never values), which is a safe first check. In a client, ask Claude to run `etoro_check_connection` to confirm the keys work and which mode the server is in.

@@ -19,6 +19,8 @@ All tools are prefixed `etoro_`. Read tools are annotated `readOnlyHint: true`; 
 | `etoro_get_rates` | `GET /api/v1/market-data/instruments/rates` | `instrumentIds[]` (1–100) |
 | `etoro_check_eligibility` | `POST /api/v2/trading/info/eligibility` (computes only; demo inferred) | `instrumentIds[]` and/or `symbols[]` |
 | `etoro_get_trading_costs` | `POST /api/v2/trading/info/costs` (what-if; demo: `/info/demo/costs`) | `action`, `transaction`, `symbol`/`instrumentId`, `settlementType`, `orderType`, `leverage`, `amountUsd`, `positionIds[]` |
+| `etoro_search_instruments` | `GET /api/v2/market-data/instruments/search` | `query` (1-100 chars), `limit` (1-50, default 10); returns instrumentId, symbol, displayName, type, exchangeId |
+| `etoro_get_candles` | `GET /api/v1/data/instruments/{instrumentId}/candles` | `instrumentId`, `interval` (1m 5m 10m 15m 30m 1h 4h 1d 1w), `from`/`to` (ISO 8601 with timezone), `limit` (1-2000, default 100), `side` (bid/ask/both), `cursor`, `summaryOnly`. The answer adds a `summary` computed from the candles returned |
 | `etoro_list_watchlists` | `GET /api/v1/watchlists` | `itemsPerPage`, `includeBuiltin` |
 | `etoro_get_action_status` | – (local: the server's prepared actions) | `actionId` |
 
