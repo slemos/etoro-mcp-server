@@ -90,6 +90,7 @@ export const R = {
   investorCopiers: (username: string) => route("investorCopiers", "read", "GET", `/api/v2/portfolios/${id(username)}/copiers`),
   cashTransactions: (accountId: string) =>
     route("cashTransactions", "read", "GET", `/api/v1/money/accounts/cash/${id(accountId)}/transactions`),
+  priceAlerts: () => route("priceAlerts", "read", "GET", "/api/v1/price-alerts"),
   balanceHistory: () => route("balanceHistory", "read", "GET", "/api/v1/balances/history"),
 
   // ---- Write: trading -----------------------------------------------------
@@ -135,6 +136,11 @@ export const R = {
       "PATCH",
       env === "demo" ? `/api/v2/trading/demo/positions/${id(positionId)}` : `/api/v2/trading/positions/${id(positionId)}`,
     ),
+
+  // ---- Write: price alerts (no money involved) -----------------------------
+  createPriceAlert: () => route("createPriceAlert", "write", "POST", "/api/v1/price-alerts"),
+  updatePriceAlert: (alertId: string) => route("updatePriceAlert", "write", "PATCH", `/api/v1/price-alerts/${id(alertId)}`),
+  deletePriceAlert: (alertId: string) => route("deletePriceAlert", "write", "DELETE", `/api/v1/price-alerts/${id(alertId)}`),
 
   // ---- Write: watchlists (no money involved) ------------------------------
   createWatchlist: () => route("createWatchlist", "write", "POST", "/api/v1/watchlists"),

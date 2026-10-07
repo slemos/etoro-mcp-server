@@ -27,9 +27,10 @@
 | *"Find the Apple instrument and tell me how it did over the last year."* | Searches by name, then reads the price candles and summarises them (first open, last close, high, low, change). |
 | *"Prepare a purchase of 20 dollars of AAPL on my demo account."* | Claude **prepares** the order (instrument, size, costs, environment) and your browser opens an approval page with the exact action. **You** press Execute there; Claude cannot. Then it follows the order. |
 | *"Prepare closing that position."* / *"Add a stop loss at 780 to it."* / *"Prepare cancelling that pending order."* | Same: Claude proposes, you execute on the page. |
+| *"Tell me when AAPL reaches 350."* / *"Move that alert to 340."* / *"Delete the alert."* | Price alerts: Claude lists them and **prepares** creating, changing or deleting one; you execute on the page. An alert only notifies you: it places no order and moves no money. |
 | *"Add these instruments to my Tech watchlist."* | Creates and edits watchlists (no money involved). |
 
-23 read tools, 9 prepare-only write tools and one gated transfer tool; see [Tools](#tools).
+24 read tools, 12 prepare-only write tools and one gated transfer tool; see [Tools](#tools).
 
 **Safe by default.** It starts **read-only and on eToro's demo environment**. The tools that can move money are not even registered until you switch them on, real money needs a second switch, and Claude can only *prepare* an action: **you execute it yourself on a local approval page**, never Claude. Size caps, a rate limit and an audit log apply on top. Your keys stay on your machine (OS keychain, password manager or a protected file) and are never shown to Claude. Details in the [safety model](#safety-model).
 
@@ -278,7 +279,7 @@ All settings are environment variables (see [`.env.example`](.env.example)). The
 
 ## Tools
 
-23 **read** tools (always available) and 9 **write** tools that only *prepare* (+1 gated transfer tool). Full parameters and the eToro routes they use are in [docs/TOOLS.md](docs/TOOLS.md).
+24 **read** tools (always available) and 12 **write** tools that only *prepare* (+1 gated transfer tool). Full parameters and the eToro routes they use are in [docs/TOOLS.md](docs/TOOLS.md).
 
 | Tool | Kind | Purpose |
 |---|---|---|
@@ -301,6 +302,7 @@ All settings are environment variables (see [`.env.example`](.env.example)). The
 | `etoro_get_rates` | read | Bid/ask for instruments |
 | `etoro_check_eligibility` | read | Settlement types, leverage, limits per instrument |
 | `etoro_get_trading_costs` | read | What-if cost breakdown for an order |
+| `etoro_list_price_alerts` | read | Your active price alerts, with which way the price has to move to reach each target and how far |
 | `etoro_list_watchlists` | read | Your watchlists |
 | `etoro_get_action_status` | read | Where a prepared action stands (waiting, executed with eToro's answer, rejected, expired, failed); also finds actions from earlier sessions |
 | `etoro_get_action_history` | read | Search the local history (text, ids, dates, environment, action, status) and see today's use of the daily limits |
@@ -311,6 +313,7 @@ All settings are environment variables (see [`.env.example`](.env.example)). The
 | `etoro_prepare_cancel_order` | write (preview) | Preview cancelling a pending order |
 | `etoro_prepare_cancel_close_order` | write (preview) | Preview cancelling a pending close order (the position stays open) |
 | `etoro_prepare_transfer` | write (preview, gated) | Preview an internal transfer (real + opt-in only) |
+| `etoro_prepare_create_price_alert` / `..._update_price_alert` / `..._delete_price_alert` | write (preview) | Propose creating, changing the target of, or deleting a price alert (no order, no money); you execute them on the page |
 | `etoro_prepare_create_watchlist` / `..._add_watchlist_items` / `..._remove_watchlist_items` / `..._delete_watchlist` | write (preview) | Propose watchlist changes (no money involved); you execute them on the page |
 
 ### Example: a guarded order
