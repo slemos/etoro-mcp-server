@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.8.0 — unreleased
+## 0.8.0 — 2026-10-07
 
 Price alerts, with the same rule as everything else that changes something: Claude prepares, you execute.
 
