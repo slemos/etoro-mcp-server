@@ -22,6 +22,17 @@ export function settlementOf(settlementTypeID: unknown): Settlement | undefined 
   return undefined;
 }
 
+/**
+ * `requiresW8Ben` in an eligibility answer: true when eToro needs a W-8BEN tax form on file to trade the instrument,
+ * false when it does not, undefined when the answer has no such information (eToro sends null where it does not apply).
+ */
+export function requiresW8Ben(eligibility: unknown, instrumentId: number): boolean | undefined {
+  const root = asRecord(eligibility);
+  const entries = Array.isArray(root.eligibilities) ? root.eligibilities.map(asRecord) : [];
+  const entry = entries.find((e) => Number(e.instrumentId) === instrumentId) ?? (entries.length === 0 ? root : {});
+  return typeof entry.requiresW8Ben === "boolean" ? entry.requiresW8Ben : undefined;
+}
+
 export interface Offered {
   /** True when the eligibility answer had at least one configuration for this instrument and direction. */
   known: boolean;

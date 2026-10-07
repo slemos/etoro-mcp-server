@@ -5,7 +5,7 @@ import { R } from "../endpoints.js";
 import { asRecord, lookupInstruments, resolveInstrument } from "../instruments.js";
 import { InputError, PolicyError } from "../errors.js";
 import { estimateClose } from "../closeEstimate.js";
-import { offeredSettlements, settlementOf } from "../settlement.js";
+import { offeredSettlements, requiresW8Ben, settlementOf } from "../settlement.js";
 import { type ToolContext, WRITE, extractList, guarded, ok, explain } from "./common.js";
 
 const id = z.number().int().positive();
@@ -152,6 +152,16 @@ export function registerWriteTools(ctx: ToolContext): void {
             ? `No settlementType was given. eToro offers only '${onlyOffered}' for this instrument on this account, so the order opens as ${onlyOffered === "cfd" ? "a CFD (a contract on the price, not the asset itself)" : "the real asset"}.`
             : "No settlementType was given, so eToro chooses it. It can be a CFD (a contract on the price, not the asset itself); " +
               "in a demo test a plain AAPL buy was opened as a CFD. Pass settlementType 'real' to ask for the actual asset, or 'cfd' to make the choice explicit.",
+        );
+      }
+      if (requiresW8Ben(eligibility, instrument.instrumentId) === true) {
+        warnings.push(
+          "eToro says a W-8BEN tax form is required to trade this instrument. If it is not on file or has expired, the order can be rejected. This is eToro's own flag: it is not tax advice.",
+        );
+      }
+      if (a.leverage >= 5) {
+        warnings.push(
+          `Leverage ${a.leverage}x: a move of about ${(100 / a.leverage).toFixed(1)}% against the position uses up the whole amount, so the loss can reach 100% of what you put in (eToro may close it earlier).`,
         );
       }
       const costs = await bestEffort("Cost estimate", warnings, () =>

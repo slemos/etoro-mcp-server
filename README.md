@@ -21,13 +21,15 @@
 | *"How are the traders I copy performing?"* | One compact summary per copied trader, with their positions available on request. |
 | *"What would it cost to buy 50 dollars of AAPL, and can my account even do that?"* | Live price, the settlement types and leverage your account is offered, and an estimate of the fees. |
 | *"What if I had bought 1,000 dollars of AAPL in January with a stop at 170?"* / *"How would investing 100 dollars every two weeks have done over two years?"* | A simulation on eToro's past price candles (`etoro_simulate_position`, `etoro_backtest`): entry and exit, why it ended, the result, the worst moment. It places nothing and prepares nothing, and it is not a forecast or advice. |
+| *"Find popular investors with moderate risk who trade mostly tech, and show me one's stats."* | Searches investors by performance, risk and what they hold (`etoro_search_investors`), then reads one's public statistics, copiers and history (`etoro_get_investor`). Public data only, past performance is not a forecast. |
+| *"How did my balance change over the last three months? What went through my cash account?"* | `etoro_get_balance_history` and `etoro_get_cash_transactions`. |
 | *"Show my closed trades since January."* | Your trade history, filtered by date. |
 | *"Find the Apple instrument and tell me how it did over the last year."* | Searches by name, then reads the price candles and summarises them (first open, last close, high, low, change). |
 | *"Prepare a purchase of 20 dollars of AAPL on my demo account."* | Claude **prepares** the order (instrument, size, costs, environment) and your browser opens an approval page with the exact action. **You** press Execute there; Claude cannot. Then it follows the order. |
 | *"Prepare closing that position."* / *"Add a stop loss at 780 to it."* / *"Prepare cancelling that pending order."* | Same: Claude proposes, you execute on the page. |
 | *"Add these instruments to my Tech watchlist."* | Creates and edits watchlists (no money involved). |
 
-19 read tools, 9 prepare-only write tools and one gated transfer tool; see [Tools](#tools).
+23 read tools, 9 prepare-only write tools and one gated transfer tool; see [Tools](#tools).
 
 **Safe by default.** It starts **read-only and on eToro's demo environment**. The tools that can move money are not even registered until you switch them on, real money needs a second switch, and Claude can only *prepare* an action: **you execute it yourself on a local approval page**, never Claude. Size caps, a rate limit and an audit log apply on top. Your keys stay on your machine (OS keychain, password manager or a protected file) and are never shown to Claude. Details in the [safety model](#safety-model).
 
@@ -276,7 +278,7 @@ All settings are environment variables (see [`.env.example`](.env.example)). The
 
 ## Tools
 
-19 **read** tools (always available) and 9 **write** tools that only *prepare* (+1 gated transfer tool). Full parameters and the eToro routes they use are in [docs/TOOLS.md](docs/TOOLS.md).
+23 **read** tools (always available) and 9 **write** tools that only *prepare* (+1 gated transfer tool). Full parameters and the eToro routes they use are in [docs/TOOLS.md](docs/TOOLS.md).
 
 | Tool | Kind | Purpose |
 |---|---|---|
@@ -290,6 +292,10 @@ All settings are environment variables (see [`.env.example`](.env.example)). The
 | `etoro_get_instruments` | read | Resolve exact tickers / ids to instruments |
 | `etoro_search_instruments` | read | Find instruments by name or partial text ("apple", "S&P 500") |
 | `etoro_get_candles` | read | Historical price candles (1m to 1w) for a window, with a summary: first open, last close, high, low, % change, volume |
+| `etoro_search_investors` | read | Find investors by performance and risk filters (period, risk score, copiers, instrument held...), compact public stats per investor |
+| `etoro_get_investor` | read | One investor's public data by username: profile, statistics over a period, copiers, gain history and live portfolio. Free text they wrote is flagged as untrusted |
+| `etoro_get_balance_history` | read | Day-by-day total balance between two dates, with a summary (start, end, change, lowest, highest) |
+| `etoro_get_cash_transactions` | read | Movements of one of your cash accounts, newest first, paginated |
 | `etoro_simulate_position` | read | What-if on past prices: a long or short with leverage, stop loss and take profit, followed over a window of candles (entry, exit and why, result in USD and %, worst and best moments). Places nothing |
 | `etoro_backtest` | read | Backtest `buy_and_hold` or `dca` (an amount every N days) over a window, with the same total invested at the start for comparison. Places nothing |
 | `etoro_get_rates` | read | Bid/ask for instruments |
