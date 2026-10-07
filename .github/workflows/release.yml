@@ -97,22 +97,20 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-files
           path: release
+      - name: Write the release notes
+        run: scripts/release-notes.sh "${{ needs.verify.outputs.version }}" "${{ github.repository }}" > RELEASE_NOTES.md && cat RELEASE_NOTES.md
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: release/*
           fail_on_unmatched_files: true
           prerelease: ${{ needs.verify.outputs.prerelease == 'true' }}
+          body_path: RELEASE_NOTES.md
+          # Appends GitHub's list of merged changes and commits below the notes written above.
           generate_release_notes: true
-          body: |
-            **Verify before installing.** The bundle is not code-signed with a certificate, so Claude Desktop shows an "unsigned extension" notice. Check where it came from instead:
-
-            ```bash
-            shasum -a 256 -c SHA256SUMS --ignore-missing
-            gh attestation verify etoro-mcp-server-${{ needs.verify.outputs.version }}.mcpb --repo ${{ github.repository }}
-            ```
-
-            The second command proves the file was built from this repository by its release workflow. `*.sbom.cdx.json` lists the bundled dependencies (CycloneDX).
