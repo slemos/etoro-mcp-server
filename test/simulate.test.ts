@@ -127,6 +127,7 @@ describe("the simulation tools", () => {
     expect(out).toMatchObject({ hypothetical: true, instrument: { instrumentId: 1234 }, window: { candles: 4, interval: "1d" } });
     expect(out.result).toMatchObject({ entryRate: 100, exitReason: "end_of_data", pnlUsd: 300 });
     expect(out.disclaimer).toContain("not a prediction");
+    expect(out.warnings[0]).toContain("candles end on 2026-01-04");
     expect(seen).toHaveLength(2);
     expect(seen[0]!.query).toMatchObject({ interval: "1d", side: "bid", limit: "2000" });
     expect(seen[1]!.query.cursor).toBe("page2");

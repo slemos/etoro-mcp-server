@@ -29,6 +29,15 @@ async function fetchWindow(client: EtoroClient, instrumentId: number, q: { inter
   return parseCandles(raw);
 }
 
+/** The data may stop before the window does (a halted instrument, a gap in eToro's history); say so instead of letting it pass unnoticed. */
+function coverageWarnings(candles: Candle[], to: string | undefined): string[] {
+  if (candles.length === 0) return [];
+  const last = candles[candles.length - 1]!.time;
+  const end = to === undefined ? Date.now() : Date.parse(to);
+  const days = Math.floor((end - last) / 86_400_000);
+  return days > 5 ? [`eToro's candles end on ${new Date(last).toISOString().slice(0, 10)}, ${days} days before the end of the window: the simulation stops there.`] : [];
+}
+
 const window = {
   symbol: z.string().min(1).max(30).optional().describe("Exact ticker, e.g. 'AAPL'. Provide symbol or instrumentId."),
   instrumentId: z.number().int().positive().optional(),
@@ -74,6 +83,7 @@ export function registerSimulationTools(ctx: ToolContext): void {
         hypothetical: true,
         instrument,
         window: { from: a.from, to: a.to ?? "now", interval: a.interval, candles: candles.length },
+        warnings: coverageWarnings(candles, a.to),
         input: { side: a.side, amountUsd: a.amountUsd, leverage: a.leverage, stopLossRate: a.stopLossRate ?? null, takeProfitRate: a.takeProfitRate ?? null },
         result,
         disclaimer: DISCLAIMER,
@@ -109,6 +119,7 @@ export function registerSimulationTools(ctx: ToolContext): void {
         hypothetical: true,
         instrument,
         window: { from: a.from, to: a.to ?? "now", interval: a.interval, candles: candles.length },
+        warnings: coverageWarnings(candles, a.to),
         result,
         disclaimer: DISCLAIMER,
       });
