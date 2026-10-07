@@ -22,6 +22,7 @@ export class EtoroClient {
     private readonly cfg: Config,
     private readonly fetchFn: FetchFn = globalThis.fetch.bind(globalThis),
     private readonly sleep: Sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    private readonly log: (line: string) => void = (line) => process.stderr.write(`${line}\n`),
   ) {}
 
   private get secrets(): string[] {
@@ -70,6 +71,7 @@ export class EtoroClient {
     if (opts.body !== undefined) headers["content-type"] = "application/json";
 
     for (let attempt = 1; ; attempt++) {
+      const startedAt = Date.now();
       let response: Response;
       try {
         response = await this.fetchFn(url, {
@@ -80,7 +82,16 @@ export class EtoroClient {
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        if (this.cfg.debug) this.log(`[http] ${route.method} ${route.path} -> network error after ${Date.now() - startedAt}ms`);
         throw new EtoroApiError(`Network error calling eToro (${route.id}): ${redact(message, this.secrets)}`, 0);
+      }
+
+      if (this.cfg.debug) {
+        const queryKeys = [...url.searchParams.keys()];
+        this.log(
+          `[http] ${route.method} ${route.path}${queryKeys.length ? ` (query: ${queryKeys.join(",")})` : ""} -> ${response.status} ` +
+            `in ${Date.now() - startedAt}ms${attempt > 1 ? ` (attempt ${attempt})` : ""}`,
+        );
       }
 
       // The same x-request-id is reused on retry, so a retried write stays idempotent.

@@ -19,8 +19,12 @@ jobs:
       - run: npm ci
       - run: npm run typecheck && npm test
       - run: npm run mcpb:pack
-      - name: Attach the MCPB bundle to the release
+      - name: Checksums
+        run: sha256sum *.mcpb > SHA256SUMS && cat SHA256SUMS
+      - name: Attach the MCPB bundle and its checksums to the release
         uses: softprops/action-gh-release@v2
         with:
-          files: "*.mcpb"
+          files: |
+            *.mcpb
+            SHA256SUMS
           generate_release_notes: true

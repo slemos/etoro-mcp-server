@@ -3,6 +3,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { AuditFn } from "../audit.js";
 import type { EtoroClient } from "../client.js";
 import type { Config } from "../config.js";
+import type { KeyGuard } from "../environment.js";
 import { EtoroApiError, InputError, PolicyError } from "../errors.js";
 import type { PendingStore } from "../safety.js";
 
@@ -12,16 +13,63 @@ export interface ToolContext {
   client: EtoroClient;
   pending: PendingStore;
   audit: AuditFn;
+  guard: KeyGuard;
 }
 
-const MAX_TEXT = 120_000;
+let maxChars = 120_000;
 
-/** Successful tool result: JSON text, truncated (with a note) if it is very large. */
-export function ok(data: unknown, note?: string): CallToolResult {
-  let text = typeof data === "string" ? data : JSON.stringify(data, null, 2);
-  if (text.length > MAX_TEXT) {
-    text = `${text.slice(0, MAX_TEXT)}\n... [truncated ${text.length - MAX_TEXT} characters; narrow the query]`;
+/** Sets the output size cap (called once at startup from ETORO_MAX_RESPONSE_CHARS). */
+export function configureOutput(opts: { maxChars: number }): void {
+  maxChars = opts.maxChars;
+}
+
+export interface Trim {
+  path: string;
+  kept: number;
+  total: number;
+}
+
+function shrink(value: unknown, keep: number, trims: Trim[], path: string): unknown {
+  if (Array.isArray(value)) {
+    if (value.length > keep) trims.push({ path: path || "(root)", kept: keep, total: value.length });
+    return value.slice(0, keep).map((item, i) => shrink(item, keep, trims, `${path}[${i}]`));
   }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, shrink(v, keep, trims, path ? `${path}.${k}` : k)]),
+    );
+  }
+  return value;
+}
+
+/**
+ * Serializes a result. When it exceeds the size cap, arrays are shortened to their
+ * first N items (largest N that fits) so the output stays valid JSON, and a
+ * `_truncated` list reports every shortened array with its real length.
+ */
+export function render(data: unknown, limit: number = maxChars): { text: string; trimmed: Trim[] } {
+  const text = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+  if (text.length <= limit || typeof data !== "object" || data === null) {
+    if (text.length <= limit) return { text, trimmed: [] };
+    return { text: `${text.slice(0, limit)}\n... [truncated ${text.length - limit} characters]`, trimmed: [] };
+  }
+  for (const keep of [200, 100, 50, 25, 10, 5, 3, 1, 0]) {
+    const trims: Trim[] = [];
+    const shrunk = shrink(data, keep, trims, "");
+    const note = {
+      note: `Arrays were shortened to their first ${keep} items to fit the ${limit}-character output limit. Narrow the query, or raise ETORO_MAX_RESPONSE_CHARS.`,
+      arrays: trims,
+    };
+    const wrapped = Array.isArray(shrunk) ? { _truncated: note, items: shrunk } : { ...(shrunk as object), _truncated: note };
+    const out = JSON.stringify(wrapped, null, 2);
+    if (out.length <= limit) return { text: out, trimmed: trims };
+  }
+  return { text: `${text.slice(0, limit)}\n... [truncated ${text.length - limit} characters]`, trimmed: [] };
+}
+
+/** Successful tool result. */
+export function ok(data: unknown, note?: string): CallToolResult {
+  const { text } = render(data);
   return { content: [{ type: "text", text: note ? `${note}\n${text}` : text }] };
 }
 

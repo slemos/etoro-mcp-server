@@ -22,6 +22,9 @@ export function baseCfg(over: Partial<Config> = {}): Config {
     maxWritesPerMinute: 5,
     confirmTtlMs: 300_000,
     requestTimeoutMs: 30_000,
+    strictKeyScope: false,
+    maxResponseChars: 120_000,
+    debug: false,
     ...over,
   };
 }
@@ -64,11 +67,43 @@ export function mockFetch(handler: Handler): { fn: typeof fetch; calls: Recorded
   return { fn, calls };
 }
 
+/** What GET /api/v1/me returns for a Demo key with Read+Write (the default in tests). */
+export const ME = {
+  gcid: 9000111,
+  realCid: 2001,
+  demoCid: 3001,
+  username: "tester",
+  scopes: ["etoro-public:demo:read", "etoro-public:demo:write"],
+};
+
+/** The shape of eToro's eligibility answer: one long configuration per settlement type, plus a short CFD one. */
+export function eligibilityFor(instrumentId: number, settlements: Array<"cfd" | "real">) {
+  const config = (settlementType: string, direction: string, leverageValues: number[]) => ({ settlementType, direction, leverageValues, minPositionAmount: 10 });
+  return {
+    currency: "usd",
+    eligibilities: [
+      {
+        instrumentId,
+        allowOpenPosition: true,
+        leverageConfigs: [
+          ...settlements.map((s) => config(s, "long", s === "cfd" ? [1, 2, 5] : [1])),
+          ...(settlements.includes("cfd") ? [config("cfd", "short", [1, 2, 5])] : []),
+        ],
+      },
+    ],
+    notFoundInstrumentIds: [],
+    notFoundSymbols: [],
+  };
+}
+
 /** Typical eToro answers for an order on instrument 1234 (CSPX.L). */
 export function orderHandler(extra?: Handler): Handler {
   return (call) => {
     const custom = extra?.(call);
     if (custom) return custom;
+    if (call.path === "/api/v1/me") return { json: ME };
+    if (call.path === "/api/v1/trading/info/demo/aggregate-portfolio") return { json: { cid: ME.demoCid, accountTotals: {} } };
+    if (call.path === "/api/v1/trading/info/aggregate-portfolio") return { status: 403, json: { title: "Forbidden" } };
     if (call.path === "/api/v2/market-data/instruments") {
       const symbols = call.query.symbols;
       if (symbols === "AMBIG") {
@@ -84,7 +119,7 @@ export function orderHandler(extra?: Handler): Handler {
       return { json: { items: [{ instrumentId: 1234, symbol: "CSPX.L", displayName: "iShares Core S&P 500", type: "ETF", exchangeId: 5 }] } };
     }
     if (call.path === "/api/v1/market-data/instruments/rates") return { json: { rates: [{ instrumentID: 1234, ask: 846.35, bid: 846.1 }] } };
-    if (call.path.endsWith("/eligibility")) return { json: { leverageConfigs: [{ settlementType: "cfd", leverageValues: [1] }] } };
+    if (call.path.endsWith("/eligibility")) return { json: eligibilityFor(1234, ["cfd"]) };
     if (call.path.endsWith("/costs")) return { json: { instrumentId: 1234, costs: [{ costType: "markup", amount: 0.15, currency: "USD" }] } };
     if (call.method === "POST" && call.path.endsWith("/orders")) return { json: { token: "t-1", orderId: 99, referenceId: "r-1" } };
     return undefined;

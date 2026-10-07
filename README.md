@@ -6,11 +6,11 @@ An [MCP](https://modelcontextprotocol.io) server that lets Claude (and other MCP
 
 ## Highlights
 
-- **Read-only and demo by default.** Out of the box the server exposes 11 read tools against eToro's demo environment. Write tools are not even registered until you enable them.
+- **Read-only and demo by default.** Out of the box the server exposes 12 read tools against eToro's demo environment. Write tools are not even registered until you enable them.
 - **Preview → confirm for every order.** `etoro_prepare_*` tools validate the request, check eligibility, estimate costs and enforce size caps, then return a one-time `confirmationId`. Nothing is sent to eToro until `etoro_confirm_action` runs it, and — on clients that support MCP elicitation — you are asked to approve the exact action.
 - **Real money needs a second opt-in**, and defaults to requiring that human prompt.
 - **Hard limits in code**: per-order exposure cap, per-session cap, writes-per-minute limit, strict route allowlist, single-use and expiring confirmations, JSON audit log.
-- **Keys stay local.** Credentials are read from environment variables (or your OS keychain via the `.mcpb` bundle), are never accepted as tool arguments, and are redacted from errors and logs.
+- **Keys stay local.** Credentials come from your OS keychain or password manager (`*_CMD`), a protected file (`*_FILE`), environment variables, or the `.mcpb` bundle's keychain storage; are never accepted as tool arguments, and are redacted from errors and logs.
 - Separate read and write tools with MCP annotations (`readOnlyHint`, `destructiveHint`, `title`) so clients can apply sensible permission prompts.
 
 ## Safety model
@@ -26,6 +26,7 @@ An [MCP](https://modelcontextprotocol.io) server that lets Claude (and other MCP
 | Size caps | 100 USD / order, 500 USD / session | `ETORO_MAX_ORDER_USD` (exposure = amount × leverage) and `ETORO_MAX_SESSION_USD`. |
 | Rate brake | 5 writes / minute | `ETORO_MAX_WRITES_PER_MINUTE`. |
 | Route allowlist | fixed | The HTTP client can only call the routes in [`src/endpoints.ts`](src/endpoints.ts), only on the eToro host, and refuses write routes when writes are off. |
+| Environment guard | always | Before any trading preview the server reads the key's scopes (`GET /api/v1/me`) and checks that the account answering for `ETORO_ENV` is that environment's account (`demoCid`/`realCid`). It refuses if the key lacks Write permission for the environment, if the data belongs to the other account, or if this cannot be verified. |
 | Idempotency | always | Each prepared action has its own `x-request-id`, reused on retries, and a confirmation can be executed only once. |
 | Secrets | — | Never in tool inputs, results, errors or the audit log. `ETORO_BASE_URL` can only point to an `https://*.etoro.com` host. |
 
@@ -35,7 +36,7 @@ See [SECURITY.md](SECURITY.md) for the threat model and how to report a vulnerab
 
 ## Install
 
-> v0.1.0 is not published to npm yet. Build from source (below) or use the `.mcpb` bundle attached to a GitHub release.
+> v0.2.0 is not published to npm yet. Build from source (below) or use the `.mcpb` bundle attached to a GitHub release.
 
 ### Claude Desktop (MCPB bundle)
 
@@ -84,32 +85,97 @@ It is a standard **stdio** server: run `node dist/index.js` with the environment
 
 Reference: [Authentication](https://api-portal.etoro.com/core/getting-started/authentication.md).
 
+## Securing your setup
+
+The server needs two secrets (the API key and the user key). **How you hand them over matters as much as what the server does with them.** Anyone who gets the pair can read your account, and with a Write key can trade on it.
+
+**On the eToro side (always):** create a **Read** key unless you really need to trade; keep **Demo** and **Real** keys separate (eToro's documentation says a key serves one environment, but a key can carry scopes for both — `etoro_check_connection` shows them, and strict key scope — on by default for real, off for demo, configurable with `ETORO_STRICT_KEY_SCOPE` — makes the server refuse such keys for trading); restrict the key by **IP address**; set an **expiry**; revoke it at once if it may have leaked. `etoro_check_connection` shows the key's scopes and warns when a read-only server holds a Write key.
+
+**On your side:** keep the secrets out of config files and shell history. Pick the first option that your client allows:
+
+| Option | Where the secret lives | Use it with |
+|---|---|---|
+| **MCPB bundle** (`sensitive` fields) | OS keychain, managed by the host | Claude Desktop |
+| **`ETORO_API_KEY_CMD` / `ETORO_USER_KEY_CMD`** | OS keychain or password manager; the config only holds the *command* | Any client, manual setup |
+| **`ETORO_API_KEY_FILE` / `ETORO_USER_KEY_FILE`** | A file readable only by you (the server refuses it otherwise) | Any client, manual setup |
+| Plain `ETORO_API_KEY` / `ETORO_USER_KEY` | Your shell or a config file in clear text | Quick local tests only |
+
+Avoid putting the keys directly in `claude_desktop_config.json`, in `claude mcp add -e ETORO_API_KEY=...` (stored in clear text in `~/.claude.json` and in your shell history), or in a committed `.mcp.json`. Set exactly one source per key; the server refuses ambiguous setups.
+
+`*_CMD` takes a command line that prints the secret on one line. It is split into words (quotes are honored) and run **without a shell**: no pipes, no expansion. It runs with your privileges, so treat it like the `command` of the server itself. `*_FILE` accepts `~/...` paths; on macOS and Linux the file must not be accessible to group or others (`chmod 600`).
+
+### Recipes
+
+**macOS Keychain** (prompts for the value without echoing it):
+
+```bash
+security add-generic-password -U -s etoro-mcp-server -a api-key -w
+security add-generic-password -U -s etoro-mcp-server -a user-key -w
+```
+
+```json
+"env": {
+  "ETORO_API_KEY_CMD": "security find-generic-password -s etoro-mcp-server -a api-key -w",
+  "ETORO_USER_KEY_CMD": "security find-generic-password -s etoro-mcp-server -a user-key -w",
+  "ETORO_ENV": "demo"
+}
+```
+
+When macOS asks whether `security` may read the item, prefer **Allow** over **Always Allow**: with "Always Allow", any program you run that calls `security` can read it without asking.
+
+**Linux (libsecret):** `secret-tool store --label="eToro API key" service etoro-mcp-server key api-key` (same for `user-key`), then `ETORO_API_KEY_CMD="secret-tool lookup service etoro-mcp-server key api-key"`.
+
+**Password managers:** any CLI that prints the secret works, for example `op read "op://Private/eToro/api-key"` (1Password, with biometric unlock), `pass show etoro/api-key`, or `bw get password etoro-api-key` (Bitwarden, needs an unlocked session).
+
+**A protected file:**
+
+```bash
+mkdir -p ~/.config/etoro-mcp && chmod 700 ~/.config/etoro-mcp
+( umask 077; printf "API key: "; read -rs v; echo; printf '%s' "$v" > ~/.config/etoro-mcp/api-key )
+( umask 077; printf "User key: "; read -rs v; echo; printf '%s' "$v" > ~/.config/etoro-mcp/user-key )
+# then: ETORO_API_KEY_FILE=~/.config/etoro-mcp/api-key  ETORO_USER_KEY_FILE=~/.config/etoro-mcp/user-key
+```
+
+**Windows:** use the MCPB bundle (keys go to the host's credential store), or a password manager CLI through `*_CMD`.
+
+### What this does not protect against
+
+The server runs as you. Another program running as your user can read what you can read, including the keychain items you allow and files with your permissions. Prompt injection is a separate risk, covered by the write-tool safeguards above. Use IP restrictions and short expiries so that a leaked key is worth little.
+
+### Verifying what you install
+
+Building from source is small and auditable (`npm ci` uses the committed lockfile). Release bundles are published with a `SHA256SUMS` file; compare it with `shasum -a 256 etoro-mcp-server-*.mcpb`. v0.2.0 bundles are not code-signed yet.
+
 ## Configuration
 
-All settings are environment variables (see [`.env.example`](.env.example)).
+All settings are environment variables (see [`.env.example`](.env.example)). The server does not read a `.env` file by itself: export the variables, or load a git-ignored `.env` with Node's flag, e.g. `node --env-file=.env dist/index.js` (Node 20.6+).
 
 | Variable | Default | Description |
 |---|---|---|
-| `ETORO_API_KEY` | — (required) | Public API key (`x-api-key`). |
-| `ETORO_USER_KEY` | — (required) | User key (`x-user-key`). |
+| `ETORO_API_KEY` | — (required) | Public API key (`x-api-key`). Alternatives: `ETORO_API_KEY_FILE` or `ETORO_API_KEY_CMD` (see [Securing your setup](#securing-your-setup)). Set exactly one. |
+| `ETORO_USER_KEY` | — (required) | User key (`x-user-key`). Alternatives: `ETORO_USER_KEY_FILE` or `ETORO_USER_KEY_CMD`. Set exactly one. |
 | `ETORO_ENV` | `demo` | `demo` or `real`. Must match the environment of the key pair. |
 | `ETORO_ENABLE_WRITE` | `false` | Register the write tools. Needs a key with **Write** permission. |
 | `ETORO_ALLOW_REAL_WRITE` | `false` | Second switch required for write tools when `ETORO_ENV=real`. |
 | `ETORO_ALLOW_TRANSFERS` | `false` | Register the internal-transfer tool (real only, needs both switches above). |
+| `ETORO_STRICT_KEY_SCOPE` | `true` on real, `false` on demo | Refuse trading previews when the key can also write in the *other* environment. On real it means the key must be real-only; on demo it would mean the key must not be able to trade real money. Set it explicitly to override either default. |
 | `ETORO_REQUIRE_ELICITATION` | `true` on real, `false` on demo | Refuse writes unless the client can ask you to approve them. |
 | `ETORO_MAX_ORDER_USD` | `100` | Max exposure (amount × leverage) or transfer amount per action. |
 | `ETORO_MAX_SESSION_USD` | `500` | Max total exposure executed until the server restarts. |
 | `ETORO_MAX_WRITES_PER_MINUTE` | `5` | Local brake on executed writes (eToro also rate-limits). |
 | `ETORO_CONFIRM_TTL_SECONDS` | `300` | How long a preview stays confirmable. |
+| `ETORO_MAX_RESPONSE_CHARS` | `120000` | Output size cap per tool result. Above it, arrays are shortened to their first N items (the result stays valid JSON and lists each array's real length). |
+| `ETORO_DEBUG` | `false` | Log each HTTP call to eToro (method, path, query names, status, duration) to stderr. Never logs keys, headers or bodies. |
 | `ETORO_AUDIT_LOG` | unset | Append JSON-lines audit events to this file (also logged to stderr). |
 | `ETORO_BASE_URL` | `https://public-api.etoro.com` | Must be `https` on an `etoro.com` host. |
 
 ## Tools
 
-11 **read** tools (always available) and 8 **write** tools (+1 gated transfer tool). Full parameters and the eToro routes they use are in [docs/TOOLS.md](docs/TOOLS.md).
+12 **read** tools (always available) and 8 **write** tools (+1 gated transfer tool). Full parameters and the eToro routes they use are in [docs/TOOLS.md](docs/TOOLS.md).
 
 | Tool | Kind | Purpose |
 |---|---|---|
+| `etoro_check_connection` | read | Verify the keys authenticate, show their scopes (demo/real, read/write), and prove which account (demo or real) the data comes from |
 | `etoro_get_portfolio` | read | Aggregated portfolio snapshot |
 | `etoro_get_portfolio_breakdown` | read | Open positions (ids, units), pending orders, credit |
 | `etoro_get_pnl` | read | Unrealized PnL and portfolio details |
@@ -140,15 +206,31 @@ Claude: [etoro_get_order]             → status of the order
 
 eToro answers an order with "accepted for processing", not "filled": follow the order with `etoro_get_order`.
 
+## Trying an order on the demo environment
+
+`npm run demo:order` runs the whole flow through the real server on eToro's **demo** (virtual money) environment: connection and environment check, instrument lookup, eligibility, preview with cost estimate, **your confirmation in the terminal**, execution, and following the order until it has a position.
+
+```bash
+npm run demo:order -- --symbol AAPL --amount 50                 # buy $50 on demo, keep the position
+npm run demo:order -- --symbol AAPL --amount 50 --close         # ... and close it afterwards (asks again)
+npm run demo:order -- --symbol CSPX.L --amount 20 --settlement cfd
+npm run demo:order -- --close-position 123456789                # close an open demo position by id
+npm run demo:order -- --symbol AAPL --amount 50 -y 2>&1 | tee demo-order.log   # no questions, output to a log
+```
+
+The script forces `ETORO_ENV=demo` whatever your environment says, stops unless the connection check proves the key reaches your demo account, and asks before sending anything. `-y` (or `--yes`) answers yes to the questions — the order and, with `--close`, the close — so you can pipe the output to a log (use `2>&1` to include the server's audit lines). Without a terminal and without `-y` it refuses to start instead of hanging. Use a key with demo **Write** permission. After a fill it prints the new position's `settlement` (`cfd` or `real`) with its `settlementTypeID` and `isSettled`. `--settlement real` on an account that is only offered CFDs is refused at the preview.
+
 ## Known limitations
 
+- **Very large responses are shortened.** A big portfolio (many positions or copy-trading mirrors) can exceed the output cap; the server then keeps the first N items of each array and says how many there really were. Prefer narrower tools or raise `ETORO_MAX_RESPONSE_CHARS`.
 - **Responses are passed through as eToro sends them.** The shapes were taken from eToro's reference pages but the server could not be exercised against a live account in its first version. If a field is missing or renamed, please open an issue with the (redacted) response shape.
 - **Some demo *read* paths are inferred** from eToro's documented demo/real naming pattern (marked `inferred` in [`src/endpoints.ts`](src/endpoints.ts)); the demo *write* paths and the demo cost endpoint are documented.
 - **Instrument lookup is by exact ticker or id** (no free-text search). ETF tickers on eToro carry an exchange suffix such as `CSPX.L`.
 - **Elicitation support varies by client.** Claude Code supports it (2.1.76+); support in other hosts may lag. On `real`, writes are refused when the client cannot ask you, unless you set `ETORO_REQUIRE_ELICITATION=false` and accept confirming through the conversation alone.
 - Prompt injection is a real risk for any tool-using agent: do not let Claude read untrusted content (web pages, emails, documents) in the same session in which it can place real orders, and do not auto-approve `etoro_confirm_action`.
 - No streaming/WebSocket data, no copy-trading actions, no OAuth (API key pair only).
-- Eligibility to use the API and the instruments available depend on your account and jurisdiction.
+- Eligibility to use the API and the instruments available depend on your account and jurisdiction. In particular, depending on jurisdiction some accounts can only open **CFDs**, not real shares: `settlementType: "real"` is then rejected by eToro (seen on a demo account that was offered only CFDs). `etoro_prepare_open_position` reads the eligibility answer first and refuses a settlement type the account is not offered, before anything can be confirmed.
+- **Two instruments for some stocks.** eToro lists a regular-trading-hours instrument (symbol ending in `.RTH`) next to the 24/5 one for some stocks. The preview shows the exact symbol and instrument id, and warns on `.RTH`; pass `instrumentId` when in doubt.
 
 ## Development
 
@@ -161,7 +243,18 @@ node scripts/smoke.mjs   # launch the built server over stdio and list tools (du
 npm run mcpb:pack        # esbuild bundle → server/index.js, then etoro-mcp-server.mcpb
 ```
 
-With your own keys, `node scripts/smoke.mjs --live` calls two read tools and prints only the *shape* of the responses (never values), which is a safe first check.
+With your own keys in a git-ignored `.env`, `npm run smoke:live` (or `node scripts/smoke.mjs --live` with the variables exported) runs `etoro_check_connection` and a few read tools and prints only the *shape* of the responses (never values), which is a safe first check. In a client, ask Claude to run `etoro_check_connection` to confirm the keys work and which mode the server is in.
+
+Debugging options for the script (all run the real server over stdio):
+
+| Option | Effect |
+|---|---|
+| `--report` | Only verify the connection and the environment (`npm run verify` with a `.env`): prints a one-line verdict and reads no account data. |
+| `--verbose` | Print each tool's full output. It contains your real account data: keep it private. |
+| `--verbose --mask` | Same, but every value is replaced by a placeholder (`<number>`, `<string, 12 chars>`), keeping field names, types and nesting. Safe to paste into an issue. |
+| `--tool <name> --args '<json>'` | Call a single tool, e.g. `--tool etoro_get_trade_history --args '{"minDate":"2026-01-01"}'`. |
+| `--debug` | Sets `ETORO_DEBUG=true` so the server logs each HTTP call. |
+| `--entry <file>` | Launch another entry point, e.g. `server/index.js` (the bundle used by the `.mcpb`). |
 
 ```
 src/

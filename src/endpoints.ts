@@ -67,6 +67,9 @@ export const R = {
   costs: (env: EtoroEnv) =>
     route("costs", "read", "POST", env === "demo" ? "/api/v2/trading/info/demo/costs" : "/api/v2/trading/info/costs"),
 
+  // ---- Read: identity ----------------------------------------------------
+  me: () => route("me", "read", "GET", "/api/v1/me"),
+
   // ---- Read: balances, market data, watchlists ----------------------------
   balances: () => route("balances", "read", "GET", "/api/v1/balances"),
   instruments: () => route("instruments", "read", "GET", "/api/v2/market-data/instruments"),

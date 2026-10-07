@@ -2,8 +2,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type AuditFn, createAudit } from "./audit.js";
 import { EtoroClient } from "./client.js";
 import { type Config, transfersEnabled, writeEnabled } from "./config.js";
+import { KeyGuard } from "./environment.js";
 import { PendingStore } from "./safety.js";
-import { type ToolContext } from "./tools/common.js";
+import { type ToolContext, configureOutput } from "./tools/common.js";
 import { registerReadTools } from "./tools/read.js";
 import { registerWriteTools } from "./tools/write.js";
 import { SERVER_NAME, VERSION } from "./version.js";
@@ -13,6 +14,7 @@ export interface ServerDeps {
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   audit?: AuditFn;
+  log?: (line: string) => void;
 }
 
 export function buildInstructions(cfg: Config): string {
@@ -26,11 +28,12 @@ export function buildInstructions(cfg: Config): string {
 }
 
 export function createServer(cfg: Config, deps: ServerDeps = {}): { mcp: McpServer; ctx: ToolContext } {
+  configureOutput({ maxChars: cfg.maxResponseChars });
   const audit = deps.audit ?? createAudit(cfg);
-  const client = new EtoroClient(cfg, deps.fetchFn, deps.sleep);
+  const client = new EtoroClient(cfg, deps.fetchFn, deps.sleep, deps.log);
   const pending = new PendingStore(cfg, deps.now);
   const mcp = new McpServer({ name: SERVER_NAME, version: VERSION }, { instructions: buildInstructions(cfg) });
-  const ctx: ToolContext = { mcp, cfg, client, pending, audit };
+  const ctx: ToolContext = { mcp, cfg, client, pending, audit, guard: new KeyGuard(client, cfg, deps.now) };
 
   registerReadTools(ctx);
   if (writeEnabled(cfg)) registerWriteTools(ctx);

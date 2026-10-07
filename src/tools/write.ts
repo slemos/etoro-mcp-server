@@ -1,33 +1,13 @@
 import { z } from "zod";
 import { transfersEnabled } from "../config.js";
 import { R } from "../endpoints.js";
+import { type Instrument, asRecord, toInstrument } from "../instruments.js";
 import { InputError, PolicyError } from "../errors.js";
 import { askHuman } from "../safety.js";
+import { offeredSettlements } from "../settlement.js";
 import { type ToolContext, WRITE, extractList, fail, guarded, ok, explain } from "./common.js";
 
 const id = z.number().int().positive();
-
-interface Instrument {
-  instrumentId: number;
-  symbol: string;
-  displayName?: string;
-  type?: string;
-}
-
-const asRecord = (value: unknown): Record<string, unknown> =>
-  value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-
-function toInstrument(raw: unknown): Instrument | undefined {
-  const r = asRecord(raw);
-  const instrumentId = Number(r.instrumentId ?? r.instrumentID);
-  if (!Number.isInteger(instrumentId) || instrumentId <= 0) return undefined;
-  return {
-    instrumentId,
-    symbol: String(r.symbol ?? r.internalSymbolFull ?? ""),
-    displayName: typeof r.displayName === "string" ? r.displayName : undefined,
-    type: typeof r.type === "string" ? r.type : undefined,
-  };
-}
 
 async function resolveInstrument(ctx: ToolContext, symbol?: string, instrumentId?: number): Promise<Instrument> {
   const { client } = ctx;
@@ -60,7 +40,7 @@ async function bestEffort<T>(label: string, warnings: string[], fn: () => Promis
 const usd = (n: number): string => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export function registerWriteTools(ctx: ToolContext): void {
-  const { mcp, cfg, client, pending, audit } = ctx;
+  const { mcp, cfg, client, pending, audit, guard } = ctx;
   const env = cfg.env;
   const envLabel = env.toUpperCase();
 
@@ -73,7 +53,8 @@ export function registerWriteTools(ctx: ToolContext): void {
         `Validates and previews an order to open a position in the ${envLabel} account: resolves the instrument, checks eligibility, estimates costs and ` +
         `checks the per-order cap (ETORO_MAX_ORDER_USD = ${cfg.maxOrderUsd} USD of exposure, i.e. amount x leverage). ` +
         "Sends nothing to eToro: it returns a confirmationId that etoro_confirm_action executes. " +
-        "settlementType 'real' buys the actual asset, 'cfd' opens a contract for difference. Leverage above 1, short selling and trailing stops require stopLossRate. " +
+        "settlementType 'real' buys the actual asset, 'cfd' opens a contract for difference; the preview rejects a type the account is not offered for that instrument " +
+        "(some jurisdictions only get CFDs). Some stocks have a separate regular-hours instrument (symbol ending in .RTH) next to the 24/5 one: pass the exact symbol or instrumentId. Leverage above 1, short selling and trailing stops require stopLossRate. " +
         "Order reference: https://api-portal.etoro.com/core/guides/market-orders.md.",
       inputSchema: {
         symbol: z.string().min(1).max(30).optional().describe("Exact ticker, e.g. 'CSPX.L'. Provide symbol or instrumentId."),
@@ -93,6 +74,7 @@ export function registerWriteTools(ctx: ToolContext): void {
       annotations: WRITE("Preview opening an eToro position", { destructive: false, idempotent: true }),
     },
     guarded(async (a) => {
+      await guard.assertWritable();
       if ((a.symbol === undefined) === (a.instrumentId === undefined)) {
         throw new InputError("Provide exactly one of symbol or instrumentId.");
       }
@@ -107,6 +89,12 @@ export function registerWriteTools(ctx: ToolContext): void {
 
       const warnings: string[] = [];
       const instrument = await resolveInstrument(ctx, a.symbol, a.instrumentId);
+      if (/\.RTH$/i.test(instrument.symbol)) {
+        warnings.push(
+          `${instrument.symbol} is the regular-trading-hours variant of the instrument; the plain ticker is the separate 24/5 instrument ` +
+            `(the eToro app switches between them with its "24/5 Trading" toggle). Check that this is the one you mean.`,
+        );
+      }
       const rates = await bestEffort("Market rate", warnings, () =>
         client.call(R.rates(), { query: { instrumentIds: [instrument.instrumentId] } }),
       );
@@ -132,6 +120,23 @@ export function registerWriteTools(ctx: ToolContext): void {
       const eligibility = await bestEffort("Eligibility check", warnings, () =>
         client.call(R.eligibility(env), { body: { instrumentIds: [instrument.instrumentId], currency: "USD" } }),
       );
+      const direction = a.side === "buy" ? "long" : "short";
+      const offered = offeredSettlements(eligibility, instrument.instrumentId, direction);
+      if (a.settlementType !== undefined && offered.known && !offered.settlements.includes(a.settlementType)) {
+        throw new InputError(
+          `This ${envLabel} account does not offer settlementType '${a.settlementType}' for ${instrument.symbol} (${direction}): eToro offers ${offered.settlements.join(", ")}. ` +
+            "What is offered depends on the account's jurisdiction (for example, some accounts can only trade CFDs). Nothing was sent.",
+        );
+      }
+      const onlyOffered = offered.settlements.length === 1 ? offered.settlements[0] : undefined;
+      if (a.settlementType === undefined && a.side === "buy") {
+        warnings.push(
+          onlyOffered
+            ? `No settlementType was given. eToro offers only '${onlyOffered}' for this instrument on this account, so the order opens as ${onlyOffered === "cfd" ? "a CFD (a contract on the price, not the asset itself)" : "the real asset"}.`
+            : "No settlementType was given, so eToro chooses it. It can be a CFD (a contract on the price, not the asset itself); " +
+              "in a demo test a plain AAPL buy was opened as a CFD. Pass settlementType 'real' to ask for the actual asset, or 'cfd' to make the choice explicit.",
+        );
+      }
       const costs = await bestEffort("Cost estimate", warnings, () =>
         client.call(R.costs(env), {
           body: {
@@ -172,7 +177,7 @@ export function registerWriteTools(ctx: ToolContext): void {
       const size = a.amountUsd !== undefined ? `${usd(a.amountUsd)}` : `${a.units} units (~${usd(cash)})`;
       const summary =
         `OPEN ${a.side === "buy" ? "BUY" : "SHORT"} ${instrument.symbol} (id ${instrument.instrumentId}${instrument.displayName ? `, ${instrument.displayName}` : ""}) ` +
-        `| ${size} | ${a.leverage}x | ${a.settlementType ?? "default settlement"} | ${a.orderType} order` +
+        `| ${size} | ${a.leverage}x | ${a.settlementType ?? (onlyOffered ? `${onlyOffered} (the only one offered)` : "default settlement")} | ${a.orderType} order` +
         `${a.stopLossRate !== undefined ? ` | stop loss ${a.stopLossRate} (${a.stopLossType})` : " | no stop loss"}` +
         `${a.takeProfitRate !== undefined ? ` | take profit ${a.takeProfitRate}` : ""}` +
         ` | environment ${envLabel}`;
@@ -192,6 +197,7 @@ export function registerWriteTools(ctx: ToolContext): void {
         summary,
         instrument,
         estimatedExposureUsd: Number(exposure.toFixed(2)),
+        settlement: { requested: a.settlementType ?? null, offered: offered.known ? offered.settlements : null },
         marketRate: Number.isFinite(ask) ? { bid: rate.bid, ask: rate.ask } : null,
         eligibility,
         estimatedCosts: costs,
@@ -217,6 +223,7 @@ export function registerWriteTools(ctx: ToolContext): void {
       annotations: WRITE("Preview closing an eToro position", { destructive: false, idempotent: true }),
     },
     guarded(async ({ positionId, instrumentId, unitsToDeduct }) => {
+      await guard.assertWritable();
       const warnings: string[] = [];
       const breakdown = await bestEffort("Position lookup", warnings, () => client.call(R.portfolioBreakdown(env)));
       const rawPositions = asRecord(asRecord(breakdown).clientPortfolio).positions;
@@ -264,6 +271,7 @@ export function registerWriteTools(ctx: ToolContext): void {
       annotations: WRITE("Preview cancelling an eToro order", { destructive: false, idempotent: true }),
     },
     guarded(async ({ orderId }) => {
+      await guard.assertWritable();
       const warnings: string[] = [];
       const order = await bestEffort("Order lookup", warnings, () => client.call(R.orderLookup(env), { query: { orderId } }));
       const summary = `CANCEL order ${orderId} | environment ${envLabel}`;
@@ -308,6 +316,7 @@ export function registerWriteTools(ctx: ToolContext): void {
         annotations: WRITE("Preview an internal eToro transfer", { destructive: false, idempotent: true }),
       },
       guarded(async (t) => {
+        await guard.assertWritable();
         if (t.amount > cfg.maxOrderUsd) {
           throw new PolicyError(`Transfer amount ${usd(t.amount)} exceeds the cap ETORO_MAX_ORDER_USD (${usd(cfg.maxOrderUsd)}).`);
         }

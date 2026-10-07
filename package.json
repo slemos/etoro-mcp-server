@@ -1,6 +1,6 @@
 {
   "name": "etoro-mcp-server",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Unofficial MCP server for the eToro Public API: read your portfolio and market data, and (opt-in) place orders with preview, cost check and human confirmation. Demo-first and read-only by default.",
   "repository": {
     "type": "git",
@@ -32,7 +32,11 @@
     "bundle": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=server/index.js --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\"",
     "mcpb:validate": "npx --yes @anthropic-ai/mcpb validate manifest.json",
     "mcpb:pack": "npm run bundle && npx --yes @anthropic-ai/mcpb pack . etoro-mcp-server.mcpb",
-    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+    "prepublishOnly": "npm run typecheck && npm test && npm run build",
+    "smoke": "node scripts/smoke.mjs",
+    "smoke:live": "node --env-file=.env scripts/smoke.mjs --live",
+    "verify": "node --env-file=.env scripts/smoke.mjs --report",
+    "demo:order": "node --env-file=.env scripts/demo-order.mjs"
   },
   "keywords": [
     "mcp",

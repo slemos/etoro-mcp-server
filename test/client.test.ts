@@ -93,4 +93,21 @@ describe("EtoroClient", () => {
     const err = (await client.call(R.balances()).catch((e: unknown) => e)) as Error;
     expect(err.message).not.toContain(API_KEY);
   });
+
+  it("debug logging records method, path, status and query keys but never keys, headers or bodies", async () => {
+    const lines: string[] = [];
+    const { fn } = mockFetch(() => ({ json: { secretBalance: 12345 } }));
+    const client = new EtoroClient(baseCfg({ debug: true }), fn, noSleep, (l) => lines.push(l));
+    await client.call(R.rates(), { query: { instrumentIds: [1, 2] } });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/\[http\] GET \/api\/v1\/market-data\/instruments\/rates \(query: instrumentIds\) -> 200 in \d+ms/);
+    for (const secret of [API_KEY, USER_KEY, "12345", "1,2"]) expect(lines[0]).not.toContain(secret);
+  });
+
+  it("is silent by default", async () => {
+    const lines: string[] = [];
+    const { fn } = mockFetch(() => ({ json: {} }));
+    await new EtoroClient(baseCfg(), fn, noSleep, (l) => lines.push(l)).call(R.balances());
+    expect(lines).toHaveLength(0);
+  });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { API_KEY, USER_KEY, type RecordedCall, baseCfg, connect, orderHandler, textOf } from "./helpers.js";
+import { API_KEY, ME, USER_KEY, type Handler, type RecordedCall, baseCfg, connect, eligibilityFor, orderHandler, textOf } from "./helpers.js";
 
 const WRITE_TOOLS = [
   "etoro_prepare_open_position",
@@ -104,6 +104,81 @@ describe("write flow", () => {
     expect(audit).not.toContain(API_KEY);
     expect(audit).not.toContain(USER_KEY);
     await close();
+  });
+
+  const prepare = async (client: Awaited<ReturnType<typeof connect>>["client"], args: Record<string, unknown>) =>
+    client.callTool({ name: "etoro_prepare_open_position", arguments: args });
+  const offering = (...settlements: Array<"cfd" | "real">): Handler => (call) =>
+    call.path.endsWith("/eligibility") ? { json: eligibilityFor(1234, settlements) } : undefined;
+
+  it("warns when no settlement type is given and eToro could pick either, and stays quiet when it is explicit", async () => {
+    const { client, close } = await connect(cfg, orderHandler(offering("real", "cfd")), "accept");
+    const implicit = JSON.parse(textOf(await prepare(client, { symbol: "CSPX.L", side: "buy", amountUsd: 10 })));
+    expect(implicit.warnings.join(" ")).toContain("No settlementType was given, so eToro chooses it");
+    expect(implicit.warnings.join(" ")).toContain("CFD");
+    const explicit = JSON.parse(textOf(await prepare(client, { ...openArgs, amountUsd: 10, settlementType: "real" })));
+    expect(explicit.warnings.join(" ")).not.toContain("No settlementType");
+    expect(explicit.settlement).toEqual({ requested: "real", offered: ["real", "cfd"] });
+    await close();
+  });
+
+  it("says so when the account is only offered one settlement type", async () => {
+    const { client, close } = await connect(cfg, orderHandler(), "accept");
+    const preview = JSON.parse(textOf(await prepare(client, { symbol: "CSPX.L", side: "buy", amountUsd: 10 })));
+    expect(preview.warnings.join(" ")).toContain("eToro offers only 'cfd'");
+    expect(preview.summary).toContain("cfd (the only one offered)");
+    expect(preview.settlement).toEqual({ requested: null, offered: ["cfd"] });
+    await close();
+  });
+
+  it("rejects a settlement type the account is not offered, before anything can be confirmed", async () => {
+    const { client, calls, auditLines, close } = await connect(cfg, orderHandler(), "accept");
+    const res = await prepare(client, { symbol: "CSPX.L", side: "buy", amountUsd: 10, settlementType: "real" });
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toContain("does not offer settlementType 'real'");
+    expect(textOf(res)).toContain("eToro offers cfd");
+    expect(auditLines.join("\n")).not.toContain("prepared");
+    expect(calls.some((c) => c.path.endsWith("/costs"))).toBe(false);
+    expect(orderCalls(calls)).toHaveLength(0);
+    await close();
+  });
+
+  it("only compares settlement types with the direction being opened", async () => {
+    // Real is offered long only; a short must not be accepted on the strength of the long configuration.
+    const longOnlyReal: Handler = (call) =>
+      call.path.endsWith("/eligibility")
+        ? { json: { eligibilities: [{ instrumentId: 1234, leverageConfigs: [{ settlementType: "real", direction: "long" }, { settlementType: "cfd", direction: "short" }] }] } }
+        : undefined;
+    const { client, close } = await connect(cfg, orderHandler(longOnlyReal), "accept");
+    const short = await prepare(client, { symbol: "CSPX.L", side: "sellShort", amountUsd: 10, settlementType: "real", leverage: 1, stopLossRate: 900 });
+    expect(short.isError).toBe(true);
+    expect(textOf(short)).toContain("(short)");
+    await close();
+  });
+
+  it("does not block when eligibility is unavailable", async () => {
+    const down: Handler = (call) => (call.path.endsWith("/eligibility") ? { status: 500, json: { title: "boom" } } : undefined);
+    const { client, close } = await connect(cfg, orderHandler(down), "accept");
+    const preview = JSON.parse(textOf(await prepare(client, { symbol: "CSPX.L", side: "buy", amountUsd: 10, settlementType: "real" })));
+    expect(preview.settlement).toEqual({ requested: "real", offered: null });
+    expect(preview.warnings.join(" ")).toContain("Eligibility check unavailable");
+    await close();
+  });
+
+  it("flags the regular-trading-hours variant of an instrument", async () => {
+    const rth: Handler = (call) =>
+      call.path === "/api/v2/market-data/instruments"
+        ? { json: { items: [{ instrumentId: 1234, symbol: "AAPL.RTH", displayName: "Apple", type: "Stocks" }] } }
+        : undefined;
+    const { client, close } = await connect(cfg, orderHandler(rth), "accept");
+    const preview = JSON.parse(textOf(await prepare(client, { symbol: "AAPL.RTH", side: "buy", amountUsd: 10, settlementType: "cfd" })));
+    expect(preview.warnings.join(" ")).toContain("regular-trading-hours variant");
+    await close();
+
+    const other = await connect(cfg, orderHandler(), "accept");
+    const plain = JSON.parse(textOf(await prepare(other.client, { symbol: "CSPX.L", side: "buy", amountUsd: 10, settlementType: "cfd" })));
+    expect(plain.warnings.join(" ")).not.toContain("regular-trading-hours");
+    await other.close();
   });
 
   it("a declined confirmation sends nothing", async () => {
@@ -269,6 +344,230 @@ describe("read tools", () => {
     expect(none.isError).toBe(true);
     expect(both.isError).toBe(true);
     expect(calls).toHaveLength(0);
+    await close();
+  });
+});
+
+describe("etoro_check_connection", () => {
+  const check = async (cfg = baseCfg(), handler: Handler = orderHandler(), elicit: "accept" | "none" = "accept") => {
+    const ctx = await connect(cfg, handler, elicit);
+    const res = await ctx.client.callTool({ name: "etoro_check_connection", arguments: {} });
+    return { ...ctx, res, out: JSON.parse(textOf(res)) };
+  };
+
+  it("proves a demo key reaches the demo account", async () => {
+    const { out, calls, res, close } = await check();
+    expect(out.connected).toBe(true);
+    expect(out.environment).toBe("demo");
+    expect(out.keyIsFor).toEqual(["demo"]);
+    expect(out.dataBelongsTo).toBe("demo");
+    expect(out.environmentVerified).toBe(true);
+    expect(out.warnings).toEqual([]);
+    expect(out.advice.join(" ")).toContain("Read-only key");
+    expect(out.advice.join(" ")).toContain("IP address");
+    expect(out.account).toEqual({ username: "tester", gcid: "***111", demoCid: "***001", realCid: "***001" });
+    expect(textOf(res)).not.toContain("9000111");
+    expect(out.client.supportsConfirmationPrompts).toBe(true);
+    expect(calls.every((c) => c.method === "GET")).toBe(true);
+    await close();
+  });
+
+  it("cross-checks the other environment: a Demo key is rejected on the real route", async () => {
+    const { out, close } = await check();
+    expect(out.otherEnvironmentRoute).toEqual({ environment: "real", answered: false, sameAccountAsConfigured: null, belongsTo: null });
+    expect(out.environmentVerified).toBe(true);
+    await close();
+  });
+
+  it("flags routes that return the same account for both environments", async () => {
+    const handler = (call: RecordedCall) =>
+      call.path === "/api/v1/trading/info/aggregate-portfolio" ? { json: { cid: ME.demoCid } } : orderHandler()(call);
+    const { out, close } = await check(baseCfg(), handler);
+    expect(out.otherEnvironmentRoute.sameAccountAsConfigured).toBe(true);
+    expect(out.environmentVerified).toBe(false);
+    expect(out.warnings.join(" ")).toContain("cannot be told apart");
+    await close();
+  });
+
+  it("notes when the other route answers although the key is not scoped for it", async () => {
+    const handler = (call: RecordedCall) =>
+      call.path === "/api/v1/trading/info/aggregate-portfolio" ? { json: { cid: ME.realCid } } : orderHandler()(call);
+    const { out, close } = await check(baseCfg(), handler);
+    expect(out.otherEnvironmentRoute).toEqual({ environment: "real", answered: true, sameAccountAsConfigured: false, belongsTo: "real" });
+    expect(out.warnings.join(" ")).toContain("scope enforcement could not be confirmed");
+    await close();
+  });
+
+  it("a key with demo AND real scopes is still verified for demo, with a loud privilege note", async () => {
+    const both = { ...ME, scopes: ["etoro-public:trade.demo:read", "etoro-public:trade.demo:write", "etoro-public:trade.real:read", "etoro-public:trade.real:write", "etoro-public:feed:write"] };
+    const handler = (call: RecordedCall) =>
+      call.path === "/api/v1/me"
+        ? { json: both }
+        : call.path === "/api/v1/trading/info/aggregate-portfolio"
+          ? { json: { cid: ME.realCid } }
+          : orderHandler()(call);
+    const { out, close } = await check(baseCfg(), handler);
+    expect(out.keyIsFor).toEqual(["demo", "real"]);
+    expect(out.dataBelongsTo).toBe("demo");
+    expect(out.otherEnvironmentRoute).toEqual({ environment: "real", answered: true, sameAccountAsConfigured: false, belongsTo: "real" });
+    expect(out.warnings).toEqual([]);
+    expect(out.environmentVerified).toBe(true);
+    expect(out.advice.join(" ")).toContain("ALSO place orders in the REAL environment");
+    expect(out.advice.join(" ")).toContain("Strict key scope is off");
+    expect(out.mode.strictKeyScope).toBe(false);
+    await close();
+  });
+
+  it("warns loudly when the demo route serves the REAL account", async () => {
+    const handler = (call: RecordedCall) =>
+      call.path === "/api/v1/trading/info/demo/aggregate-portfolio" ? { json: { cid: ME.realCid } } : orderHandler()(call);
+    const { out, close } = await check(baseCfg(), handler);
+    expect(out.dataBelongsTo).toBe("real");
+    expect(out.environmentVerified).toBe(false);
+    expect(out.warnings.join(" ")).toContain("REAL account");
+    await close();
+  });
+
+  it("warns when the key's scopes are for the other environment", async () => {
+    const handler = (call: RecordedCall) =>
+      call.path === "/api/v1/me" ? { json: { ...ME, scopes: ["etoro-public:real:read"] } } : orderHandler()(call);
+    const { out, close } = await check(baseCfg(), handler);
+    expect(out.keyIsFor).toEqual(["real"]);
+    expect(out.environmentVerified).toBe(false);
+    expect(out.warnings.join(" ")).toContain("scopes are for: real");
+    await close();
+  });
+
+  it("works when eToro reports no scopes, relying on the account owner", async () => {
+    const handler = (call: RecordedCall) => (call.path === "/api/v1/me" ? { json: { ...ME, scopes: [] } } : orderHandler()(call));
+    const { out, close } = await check(baseCfg(), handler);
+    expect(out.dataBelongsTo).toBe("demo");
+    expect(out.environmentVerified).toBe(true);
+    expect(out.warnings[0]).toContain("did not report the key's scopes");
+    await close();
+  });
+
+  it("reports failed authentication without leaking keys and skips the rest", async () => {
+    const handler = () => ({ status: 401, json: { title: "Unauthorized", detail: `bad ${API_KEY} ${USER_KEY}` } });
+    const { res, out, calls, close } = await check(baseCfg(), handler);
+    expect(out.connected).toBe(false);
+    expect(out.account).toBeNull();
+    expect(out.checks[0].detail).toContain("Authentication failed");
+    expect(out.checks[1].detail).toContain("Skipped");
+    expect(textOf(res)).not.toContain(API_KEY);
+    expect(textOf(res)).not.toContain(USER_KEY);
+    expect(calls).toHaveLength(1);
+    await close();
+  });
+});
+
+describe("environment guard on trading previews", () => {
+  const cfg = baseCfg({ enableWrite: true });
+  const prepare = (client: Awaited<ReturnType<typeof connect>>["client"]) =>
+    client.callTool({ name: "etoro_prepare_open_position", arguments: openArgs });
+  const withMe = (me: object) => (call: RecordedCall) => (call.path === "/api/v1/me" ? { json: me } : orderHandler()(call));
+
+  it("blocks a key whose scopes are only for the other environment", async () => {
+    const { client, calls, close } = await connect(cfg, withMe({ ...ME, scopes: ["etoro-public:real:read", "etoro-public:real:write"] }));
+    const res = await prepare(client);
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toContain("does not have Write permission for the demo environment");
+    expect(textOf(res)).toContain("real environment");
+    expect(calls.some((c) => c.path.includes("market-data") || c.path.endsWith("/costs"))).toBe(false);
+    await close();
+  });
+
+  it("blocks a read-only key", async () => {
+    const { client, close } = await connect(cfg, withMe({ ...ME, scopes: ["etoro-public:demo:read"] }));
+    const res = await prepare(client);
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toContain("Write permission");
+    await close();
+  });
+
+  it("blocks when the demo route answers with the real account", async () => {
+    const handler = (call: RecordedCall) =>
+      call.path === "/api/v1/trading/info/demo/aggregate-portfolio" ? { json: { cid: ME.realCid } } : orderHandler()(call);
+    const { client, calls, close } = await connect(cfg, handler);
+    const res = await prepare(client);
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toContain("REAL account");
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(0);
+    await close();
+  });
+
+  it("fails closed when the identity call fails", async () => {
+    const handler = (call: RecordedCall) => (call.path === "/api/v1/me" ? { status: 500, json: { title: "boom" } } : orderHandler()(call));
+    const { client, close } = await connect(cfg, handler);
+    const res = await prepare(client);
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toContain("Could not verify");
+    await close();
+  });
+
+  it("with no scopes reported, allows only if the account owner proves the environment", async () => {
+    const noScopes = (extra?: Handler) => (call: RecordedCall) =>
+      call.path === "/api/v1/me" ? { json: { ...ME, scopes: [] } } : (extra?.(call) ?? orderHandler()(call));
+    const ok1 = await connect(cfg, noScopes());
+    expect((await prepare(ok1.client)).isError).toBeFalsy();
+    await ok1.close();
+    const inconclusive = await connect(
+      cfg,
+      noScopes((c) => (c.path === "/api/v1/trading/info/demo/aggregate-portfolio" ? { json: { cid: 424242 } } : undefined)),
+    );
+    const res = await prepare(inconclusive.client);
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toContain("could not be verified");
+    await inconclusive.close();
+  });
+
+  it("strict key scope refuses keys that can also write in the other environment", async () => {
+    const both = { ...ME, scopes: ["etoro-public:trade.demo:write", "etoro-public:trade.real:write"] };
+    const handler = (call: RecordedCall) => (call.path === "/api/v1/me" ? { json: both } : orderHandler()(call));
+    const strict = await connect(baseCfg({ enableWrite: true, strictKeyScope: true }), handler);
+    const res = await prepare(strict.client);
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toContain("ETORO_STRICT_KEY_SCOPE");
+    await strict.close();
+    const relaxed = await connect(baseCfg({ enableWrite: true, strictKeyScope: false }), handler);
+    expect((await prepare(relaxed.client)).isError).toBeFalsy();
+    await relaxed.close();
+  });
+
+  it("a real-environment setup refuses a key that can also write in demo (strict is the default there)", async () => {
+    const { loadConfig } = await import("../src/config.js");
+    const realCfg = loadConfig({
+      ETORO_API_KEY: "api-key-value-1",
+      ETORO_USER_KEY: "user-key-value-2",
+      ETORO_ENV: "real",
+      ETORO_ENABLE_WRITE: "true",
+      ETORO_ALLOW_REAL_WRITE: "true",
+    });
+    expect(realCfg.strictKeyScope).toBe(true);
+    const both = { ...ME, scopes: ["etoro-public:trade.demo:write", "etoro-public:trade.real:write"] };
+    const handler = (call: RecordedCall) =>
+      call.path === "/api/v1/me"
+        ? { json: both }
+        : call.path === "/api/v1/trading/info/aggregate-portfolio"
+          ? { json: { cid: ME.realCid } }
+          : orderHandler()(call);
+    const strict = await connect(realCfg, handler);
+    const res = await prepare(strict.client);
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toContain("can also write in the demo environment");
+    await strict.close();
+    const realOnly = await connect(realCfg, (call) =>
+      call.path === "/api/v1/me" ? { json: { ...ME, scopes: ["etoro-public:trade.real:read", "etoro-public:trade.real:write"] } } : handler(call),
+    );
+    expect((await prepare(realOnly.client)).isError).toBeFalsy();
+    await realOnly.close();
+  });
+
+  it("verifies once and caches the result", async () => {
+    const { client, calls, close } = await connect(cfg, orderHandler());
+    await prepare(client);
+    await prepare(client);
+    expect(calls.filter((c) => c.path === "/api/v1/me")).toHaveLength(1);
     await close();
   });
 });

@@ -1,7 +1,12 @@
 import { z } from "zod";
+import { transfersEnabled, writeEnabled } from "../config.js";
 import { R } from "../endpoints.js";
+import { fetchIdentity, fetchSnapshotCid, ownerOfCid, scopesByEnvironment, type Identity } from "../environment.js";
+import { lookupInstruments } from "../instruments.js";
+import { type View, compactPortfolio } from "../portfolio.js";
 import { InputError } from "../errors.js";
-import { type ToolContext, READ, guarded, ok } from "./common.js";
+import { SERVER_NAME, VERSION } from "../version.js";
+import { type ToolContext, READ, explain, guarded, ok } from "./common.js";
 
 const id = z.number().int().positive();
 const DOCS = "https://api-portal.etoro.com";
@@ -13,6 +18,139 @@ const DOCS = "https://api-portal.etoro.com";
  */
 export function registerReadTools({ mcp, cfg, client }: ToolContext): void {
   const env = cfg.env;
+
+  mcp.registerTool(
+    "etoro_check_connection",
+    {
+      title: "Check eToro connection",
+      description:
+        "Verifies that the configured API keys authenticate, which environments (demo/real) and permissions (read/write) the key has, " +
+        "and whether the account that answers for the configured environment really is that environment's account. " +
+        "Returns a result per check (never key values), a masked account reference, the server's mode (read-only or write-enabled, with its caps) " +
+        "and whether the MCP client can show confirmation prompts. Makes two small read requests and places nothing.",
+      inputSchema: {},
+      annotations: READ("Check eToro connection"),
+    },
+    guarded(async () => {
+      type Outcome<T> = { ok: true; value: T; ms: number } | { ok: false; error: unknown; ms: number };
+      const timed = async <T>(fn: () => Promise<T>): Promise<Outcome<T>> => {
+        const t0 = Date.now();
+        try {
+          return { ok: true, value: await fn(), ms: Date.now() - t0 };
+        } catch (error) {
+          return { ok: false, error, ms: Date.now() - t0 };
+        }
+      };
+      const oneLine = (err: unknown): string => explain(err).replace(/\s*\n\s*/g, " ");
+      const mask = (n: number | undefined): string | null => (n === undefined ? null : `***${String(n).slice(-3)}`);
+
+      const checks: Array<{ name: string; ok: boolean; detail: string; ms?: number }> = [];
+      const warnings: string[] = [];
+
+      const me = await timed(() => fetchIdentity(client));
+      let identity: Identity | undefined;
+      if (me.ok) {
+        identity = me.value;
+        checks.push({ name: "authentication", ok: true, ms: me.ms, detail: "eToro accepted the keys and identified the account." });
+      } else {
+        checks.push({ name: "authentication", ok: false, ms: me.ms, detail: oneLine(me.error) });
+      }
+
+      let cid: number | undefined;
+      if (identity) {
+        const route = await timed(() => fetchSnapshotCid(client, env));
+        if (route.ok) {
+          cid = route.value;
+          checks.push({ name: `${env} environment route`, ok: true, ms: route.ms, detail: `The ${env} portfolio endpoint answered.` });
+        } else {
+          checks.push({
+            name: `${env} environment route`,
+            ok: false,
+            ms: route.ms,
+            detail: `${oneLine(route.error)} The keys authenticated, so this usually means the key pair was created for the other environment (ETORO_ENV is ${env}) or lacks Read permission.`,
+          });
+        }
+      } else {
+        checks.push({ name: `${env} environment route`, ok: false, detail: "Skipped because authentication failed." });
+      }
+
+      // Cross-check: does the OTHER environment's route also answer with this key, and with which account?
+      const otherEnv = env === "demo" ? "real" : "demo";
+      const otherProbe = identity ? await timed(() => fetchSnapshotCid(client, otherEnv)) : undefined;
+
+      const scoped = identity ? scopesByEnvironment(identity.scopes) : undefined;
+      const keyIsFor = scoped ? (["demo", "real"] as const).filter((e) => scoped[e].read || scoped[e].write) : [];
+      const dataBelongsTo = identity ? ownerOfCid(cid, identity) : "unknown";
+
+      if (identity) {
+        if (identity.scopes.length === 0) {
+          warnings.push("eToro did not report the key's scopes, so the key's environment cannot be read from it; rely on dataBelongsTo.");
+        } else if (!keyIsFor.includes(env)) {
+          warnings.push(`ETORO_ENV is ${env} but the key's scopes are for: ${keyIsFor.join(", ") || "neither environment"}.`);
+        }
+        if (dataBelongsTo !== "unknown" && dataBelongsTo !== env) {
+          warnings.push(`ETORO_ENV is ${env} but the data returned belongs to your ${dataBelongsTo.toUpperCase()} account. Do not enable write tools until this is resolved.`);
+        }
+      }
+      let otherEnvironmentRoute: { environment: string; answered: boolean; sameAccountAsConfigured: boolean | null; belongsTo: string | null } | null = null;
+      if (otherProbe && identity) {
+        const same = otherProbe.ok && cid !== undefined && otherProbe.value !== undefined ? otherProbe.value === cid : null;
+        otherEnvironmentRoute = {
+          environment: otherEnv,
+          answered: otherProbe.ok,
+          sameAccountAsConfigured: same,
+          belongsTo: otherProbe.ok ? ownerOfCid(otherProbe.value, identity) : null,
+        };
+        if (same) {
+          warnings.push(`The ${env} and ${otherEnv} routes returned the same account, so the environment cannot be told apart through the API.`);
+        } else if (otherProbe.ok && identity.scopes.length > 0 && scoped && !scoped[otherEnv].read && !scoped[otherEnv].write) {
+          warnings.push(`The ${otherEnv} route answered although the key's scopes are not for ${otherEnv}; scope enforcement could not be confirmed.`);
+        }
+      }
+
+      const advice: string[] = [];
+      if (scoped && scoped[otherEnv].write) {
+        advice.push(
+          cfg.strictKeyScope
+            ? `This key can ALSO place orders in the ${otherEnv.toUpperCase()} environment (its scopes include trade.${otherEnv}:write). Strict key scope is ON (the default for ${env === "real" ? "real" : "an explicit setting"}), so trading previews will be refused with this key. Use a key limited to ${env}.`
+            : `This key can ALSO place orders in the ${otherEnv.toUpperCase()} environment (its scopes include trade.${otherEnv}:write). ETORO_ENV=${env} keeps this server on ${env} routes, ` +
+                `but a leaked key could trade ${otherEnv}. Strict key scope is off (the default for demo); set ETORO_STRICT_KEY_SCOPE=true to make the server refuse such keys for trading.`,
+        );
+      }
+      if (scoped && scoped[env].write && !writeEnabled(cfg)) {
+        advice.push(`This server is read-only but the key has Write permission for ${env}. A Read-only key limits the damage if the key ever leaks.`);
+      }
+      if (identity) advice.push("Restrict the key by IP address and set an expiry in eToro (Settings > Trading > API Key Management); neither can be checked through the API.");
+      const environmentVerified =
+        !!identity && warnings.every((w) => w.startsWith("eToro did not report")) && (dataBelongsTo === env || (dataBelongsTo === "unknown" && keyIsFor.includes(env)));
+
+      return ok({
+        connected: me.ok,
+        environment: env,
+        environmentVerified,
+        dataBelongsTo,
+        otherEnvironmentRoute,
+        keyIsFor,
+        account: identity ? { username: identity.username ?? null, gcid: mask(identity.gcid), demoCid: mask(identity.demoCid), realCid: mask(identity.realCid) } : null,
+        keyScopes: identity?.scopes ?? [],
+        warnings,
+        advice,
+        checks,
+        mode: {
+          writeToolsRegistered: writeEnabled(cfg),
+          realMoneyWritesAllowed: cfg.env === "real" && writeEnabled(cfg),
+          transfersAllowed: transfersEnabled(cfg),
+          requireHumanConfirmation: cfg.requireElicitation,
+          strictKeyScope: cfg.strictKeyScope,
+          maxOrderUsd: cfg.maxOrderUsd,
+          maxSessionUsd: cfg.maxSessionUsd,
+          maxWritesPerMinute: cfg.maxWritesPerMinute,
+        },
+        client: { supportsConfirmationPrompts: Boolean(mcp.server.getClientCapabilities()?.elicitation) },
+        server: { name: SERVER_NAME, version: VERSION },
+      });
+    }),
+  );
 
   mcp.registerTool(
     "etoro_get_portfolio",
@@ -33,17 +171,47 @@ export function registerReadTools({ mcp, cfg, client }: ToolContext): void {
     ),
   );
 
+  const viewSchema = {
+    view: z
+      .enum(["summary", "mirror", "raw"])
+      .default("summary")
+      .describe(
+        "summary: compact own positions plus a summary of each copied trader (no copied positions). " +
+          "mirror: the positions of one copied trader (needs mirrorId). raw: eToro's full JSON (very large with copy trading; arrays are shortened to fit).",
+      ),
+    mirrorId: id.optional().describe("Copy-trading relationship to open when view is 'mirror'. Listed in the summary view."),
+    limit: z.number().int().min(1).max(200).default(50).describe("Positions per page."),
+    offset: z.number().int().min(0).default(0).describe("Positions to skip, for paging."),
+  };
+
+  /** Fetch, compact and add instrument symbols to the positions shown. */
+  async function portfolioView(route: ReturnType<typeof R.portfolioBreakdown>, args: { view: View; mirrorId?: number; limit: number; offset: number }, withPnl: boolean) {
+    if (args.view === "mirror" && args.mirrorId === undefined) throw new InputError("view 'mirror' needs a mirrorId.");
+    const response = await client.call(route);
+    if (args.view === "raw") return ok(response);
+
+    const compact = compactPortfolio(response, { ...args, withPnl }) as Record<string, any>;
+    const shown: Array<Record<string, unknown>> = compact.positions?.items ?? [];
+    const names = await lookupInstruments(client, shown.map((p) => Number(p.instrumentID)));
+    for (const position of shown) {
+      const instrument = names.get(Number(position.instrumentID));
+      if (instrument) Object.assign(position, { symbol: instrument.symbol, name: instrument.displayName });
+    }
+    return ok(compact);
+  }
+
   mcp.registerTool(
     "etoro_get_portfolio_breakdown",
     {
       title: "Get eToro positions and pending orders",
       description:
-        `Open positions (with position ids and units), pending orders and available credit for the ${env} account. ` +
-        "Position ids from here are what etoro_prepare_close_position needs.",
-      inputSchema: {},
+        `Open positions (with position ids, instrument symbol, units, open rate, stop loss and take profit), pending orders and available credit for the ${env} account. ` +
+        "The default view is compact; copied traders' positions are in the 'mirror' view, paged with limit and offset. " +
+        "Position ids from here are what etoro_prepare_close_position needs. For current profit/loss per position use etoro_get_pnl; for an account overview use etoro_get_portfolio.",
+      inputSchema: viewSchema,
       annotations: READ("Get eToro positions and pending orders"),
     },
-    guarded(async () => ok(await client.call(R.portfolioBreakdown(env)))),
+    guarded(async (args) => portfolioView(R.portfolioBreakdown(env), args, false)),
   );
 
   mcp.registerTool(
@@ -51,11 +219,12 @@ export function registerReadTools({ mcp, cfg, client }: ToolContext): void {
     {
       title: "Get eToro account PnL",
       description:
-        `Unrealized profit/loss and portfolio details of the ${env} account (positions, mirrors, pending orders and orders to open/close).`,
-      inputSchema: {},
+        `Unrealized profit/loss of the ${env} account: the total, and for each position its profit/loss, exposure, margin and current rate. ` +
+        "Same views and paging as etoro_get_portfolio_breakdown; the default view is compact and copied traders' positions are in the 'mirror' view.",
+      inputSchema: viewSchema,
       annotations: READ("Get eToro account PnL"),
     },
-    guarded(async () => ok(await client.call(R.pnl(env)))),
+    guarded(async (args) => portfolioView(R.pnl(env), args, true)),
   );
 
   mcp.registerTool(
@@ -100,7 +269,8 @@ export function registerReadTools({ mcp, cfg, client }: ToolContext): void {
     {
       title: "Look up an eToro order",
       description:
-        "Status and execution details of one order, found by orderId (returned when an order is placed) or by referenceId. Provide exactly one.",
+        "Status and execution details of one order, found by orderId (returned when an order is placed) or by referenceId. Provide exactly one. " +
+        "Observed statuses include WaitingForMarket and Filled. A just-placed order can answer 404 for a few seconds before eToro registers it.",
       inputSchema: {
         orderId: id.optional(),
         referenceId: z.string().min(1).max(100).optional(),
