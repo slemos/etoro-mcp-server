@@ -9,7 +9,7 @@ import { OAuthHttp } from "../src/auth/oauth.js";
 import { TokenStore } from "../src/auth/store.js";
 import { runCli } from "../src/cli.js";
 import type { OAuthSettings } from "../src/config.js";
-import { CLIENT, ENDPOINTS, fakeSso } from "./fakeSso.js";
+import { CLIENT, ENDPOINTS, asEtoroSso, fakeSso } from "./fakeSso.js";
 
 const dirs: string[] = [];
 const tmp = () => {
@@ -160,13 +160,8 @@ describe("auth command", () => {
   });
 
   it("login, status and logout, end to end against the fake service", async () => {
-    // The CLI talks to the real eToro endpoints; here its fetch is the fake, which answers by URL, so give it eToro's.
     const t = io();
-    const realEndpoints = (await import("../src/auth/oauth.js")).ETORO_OAUTH;
-    const fakeFn = (async (input: URL | string, init?: RequestInit) => {
-      const url = input.toString().replace(realEndpoints.revoke, ENDPOINTS.revoke).replace(realEndpoints.token, ENDPOINTS.token);
-      return t.sso.fn(url, init);
-    }) as typeof fetch;
+    const fakeFn = asEtoroSso(t.sso.fn);
     let consent = "";
     const cli = { ...t.base, fetchFn: fakeFn, openUrl: async (url: string) => ((consent = url), true) };
     const running = runCli(["login"], cli);

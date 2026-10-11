@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.0 — unreleased
+
+Sign in with OAuth as an alternative to API keys.
+
+### Added
+- **Sign in with OAuth** (`ETORO_AUTH=oauth`): you approve a list of permissions on eToro's page and the server gets a token limited to them, revocable at any time, with no API key in the configuration. Authorization code with PKCE; the callback is received on `localhost`. The token lasts 30 days and is renewed automatically. eToro replaces the refresh token on each renewal, so the tokens are kept in a shared SQLite file (`0600`) and renewals take a short lease: Claude Desktop and Claude Code can run at once without invalidating each other. Setup: [README, Sign in with OAuth](README.md#sign-in-with-oauth-instead-of-api-keys).
+- `etoro-mcp-server auth login | status [--check] | logout`, and the tools `etoro_sign_in` and `etoro_sign_out` (only registered with OAuth) so the sign-in can be done from Claude Desktop. `etoro_check_connection` reports the sign-in. The permissions asked for default to the narrowest that fit: read access to the chosen environment, write only when writes are enabled, never the other environment (`ETORO_OAUTH_SCOPES` overrides).
+- The MCPB bundle has a *Sign in with OAuth* switch and client id/secret fields; the API key fields are now optional.
+- Checked live before building it: scopes are enforced (a demo-only token is refused on the real account), Bearer and API-key headers together are refused, and revoking the refresh token ends the access token at once.
+
+### Changed
+- The HTTP client asks an authentication provider for the credentials of each request, and renews them once after a 401 (the same request id is reused, so a write stays idempotent). API-key behaviour is unchanged.
+- On Windows the browser is opened without `cmd /c start`, where the `&` in a long address would end the command.
+
 ## 0.8.0 — 2026-10-07
 
 Price alerts, with the same rule as everything else that changes something: Claude prepares, you execute.

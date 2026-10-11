@@ -1,6 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { AuditFn } from "../audit.js";
+import type { AuthProvider } from "../auth/provider.js";
+import type { SignInSession } from "../auth/session.js";
 import type { EtoroClient } from "../client.js";
 import type { Config } from "../config.js";
 import type { KeyGuard } from "../environment.js";
@@ -16,6 +18,9 @@ export interface ToolContext {
   tickets: TicketServer;
   audit: AuditFn;
   guard: KeyGuard;
+  auth: AuthProvider;
+  /** Present when the server signs in with OAuth. */
+  signIn?: SignInSession;
 }
 
 let maxChars = 120_000;
@@ -84,7 +89,7 @@ export function explain(err: unknown): string {
   if (err instanceof EtoroApiError) {
     const hints: Record<number, string> = {
       400: "eToro rejected the request. Check the parameters (instrument id, amounts, leverage, stop loss).",
-      401: "Authentication failed. Check that the keys are correct, not expired or IP-restricted, match ETORO_ENV, and have the permission this action needs (Read or Write).",
+      401: "Authentication failed. Check that the credentials are valid (API keys: correct, not expired or IP-restricted; OAuth: run etoro_check_connection, and sign in again if it says so), match ETORO_ENV, and have the permission this action needs (Read or Write).",
       403: "Forbidden. The key may lack the required permission (Read vs Write) or the action is not allowed for this account.",
       404: "Not found. Check the id and the environment (demo vs real).",
       409: "Duplicate request: eToro already processed this request id.",

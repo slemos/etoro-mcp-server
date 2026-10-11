@@ -1,5 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { defaultOpenUrl } from "./approval/opener.js";
+import { type AuthProvider, createAuthProvider } from "./auth/provider.js";
+import { ETORO_OAUTH, OAuthHttp } from "./auth/oauth.js";
+import { SignInSession } from "./auth/session.js";
+import { TokenStore } from "./auth/store.js";
+import { OAuthAuth } from "./auth/oauthProvider.js";
 import { ProposalStore } from "./approval/proposals.js";
 import { TicketServer } from "./approval/server.js";
 import { type AuditFn, createAudit } from "./audit.js";
@@ -7,6 +12,7 @@ import { EtoroClient } from "./client.js";
 import { ConfigError, type Config, transfersEnabled, writeEnabled } from "./config.js";
 import { KeyGuard } from "./environment.js";
 import { HistoryDb } from "./history/db.js";
+import { registerAuthTools } from "./tools/auth.js";
 import { registerHistoryTools } from "./tools/history.js";
 import { registerInvestorTools } from "./tools/investors.js";
 import { registerMoneyTools } from "./tools/money.js";
@@ -33,7 +39,8 @@ export function buildInstructions(cfg: Config): string {
     : "Write tools are disabled: this server is read-only.";
   return (
     `Tools for the eToro Public API, environment: ${cfg.env}. Read tools return eToro's JSON as is. ` +
-    `${write} Use etoro_get_instruments to turn tickers into instrument ids.`
+    `${write} Use etoro_get_instruments to turn tickers into instrument ids.` +
+    (cfg.auth.mode === "oauth" ? " The user signs in with OAuth: if a tool says they are not signed in, call etoro_sign_in and ask them to approve in the browser." : "")
   );
 }
 
@@ -57,16 +64,33 @@ function openHistory(cfg: Config, now: (() => number) | undefined, log: (line: s
   }
 }
 
+/** Builds the credential provider; with OAuth also the sign-in session the sign-in tools use. */
+function buildAuth(cfg: Config, deps: ServerDeps, log: (line: string) => void): { auth: AuthProvider; signIn?: SignInSession } {
+  if (cfg.auth.mode === "keys") return { auth: createAuthProvider(cfg.auth) };
+  const a = cfg.auth;
+  let store: TokenStore;
+  try {
+    store = new TokenStore(a.tokenPath, deps.now);
+  } catch (err) {
+    throw new ConfigError(`Cannot open the sign-in file (${a.tokenPath}): ${err instanceof Error ? err.message : String(err)}. Fix ETORO_OAUTH_TOKEN_FILE.`);
+  }
+  const http = new OAuthHttp({ clientId: a.clientId, clientSecret: a.clientSecret }, ETORO_OAUTH, deps.fetchFn, deps.now);
+  const auth = new OAuthAuth(a.clientId, store, http, deps.now, deps.sleep, log);
+  return { auth, signIn: new SignInSession(a, store, http, deps.openUrl ?? defaultOpenUrl) };
+}
+
 export function createServer(cfg: Config, deps: ServerDeps = {}): { mcp: McpServer; ctx: ToolContext } {
   configureOutput({ maxChars: cfg.maxResponseChars });
   const audit = deps.audit ?? createAudit(cfg);
-  const client = new EtoroClient(cfg, deps.fetchFn, deps.sleep, deps.log);
   const log = deps.log ?? ((line: string) => process.stderr.write(`${line}\n`));
+  const { auth, signIn } = buildAuth(cfg, deps, log);
+  const client = new EtoroClient(cfg, deps.fetchFn, deps.sleep, deps.log, auth);
   const store = new ProposalStore(cfg, deps.now, audit, explain, openHistory(cfg, deps.now, log));
   const tickets = new TicketServer(store, { now: deps.now, openUrl: deps.openUrl ?? defaultOpenUrl, log, config: cfg });
   const mcp = new McpServer({ name: SERVER_NAME, version: VERSION }, { instructions: buildInstructions(cfg) });
-  const ctx: ToolContext = { mcp, cfg, client, store, tickets, audit, guard: new KeyGuard(client, cfg, deps.now) };
+  const ctx: ToolContext = { mcp, cfg, client, store, tickets, audit, guard: new KeyGuard(client, cfg, deps.now), auth, signIn };
 
+  registerAuthTools(ctx);
   registerReadTools(ctx);
   registerHistoryTools(ctx);
   registerSimulationTools(ctx);
@@ -80,5 +104,5 @@ export function describeMode(cfg: Config): string {
   const mode = writeEnabled(cfg)
     ? `read+write${transfersEnabled(cfg) ? "+transfers" : ""}, caps ${cfg.maxOrderUsd}/order ${cfg.maxSessionUsd}/session ${cfg.maxDailyUsd}/day (${cfg.maxDailyWrites} writes/day)`
     : "read-only";
-  return `${SERVER_NAME} ${VERSION} | environment: ${cfg.env} | mode: ${mode}`;
+  return `${SERVER_NAME} ${VERSION} | environment: ${cfg.env} | sign-in: ${cfg.auth.mode === "oauth" ? "OAuth" : "API keys"} | mode: ${mode}`;
 }
