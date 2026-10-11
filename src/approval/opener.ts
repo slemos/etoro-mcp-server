@@ -6,7 +6,8 @@ export function defaultOpenUrl(url: string): Promise<boolean> {
     process.platform === "darwin"
       ? ["open", [url]]
       : process.platform === "win32"
-        ? ["cmd", ["/c", "start", "", url]]
+        ? // Not `cmd /c start`: cmd would read the "&" between query parameters as the end of the command.
+          ["rundll32", ["url.dll,FileProtocolHandler", url]]
         : ["xdg-open", [url]];
   return new Promise((resolve) => {
     try {

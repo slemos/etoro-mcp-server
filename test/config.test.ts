@@ -1,7 +1,12 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ConfigError, type SecretIo, loadConfig, splitCommand, transfersEnabled, writeEnabled } from "../src/config.js";
+import { type Config, ConfigError, type SecretIo, loadConfig, splitCommand, transfersEnabled, writeEnabled } from "../src/config.js";
+
+function keysOf(cfg: Config) {
+  if (cfg.auth.mode !== "keys") throw new Error("expected API-key authentication");
+  return cfg.auth;
+}
 
 const keys = { ETORO_API_KEY: "api-key-value-1", ETORO_USER_KEY: "user-key-value-2" };
 
@@ -120,7 +125,7 @@ describe("secret sources", () => {
 
   it("reads a key from a file with owner-only permissions and trims it", () => {
     const cfg = loadConfig({ ETORO_API_KEY_FILE: "/secure/api", ...other }, io());
-    expect(cfg.auth.apiKey).toBe("file-secret-value");
+    expect(keysOf(cfg).apiKey).toBe("file-secret-value");
   });
 
   it("refuses a key file that other users can read", () => {
@@ -132,7 +137,7 @@ describe("secret sources", () => {
 
   it("skips the permission check on Windows and reports unreadable files without details", () => {
     const win = io({ platform: "win32", fileMode: () => 0o100666 });
-    expect(loadConfig({ ETORO_API_KEY_FILE: "C:/k/api", ...other }, win).auth.apiKey).toBe("file-secret-value");
+    expect(keysOf(loadConfig({ ETORO_API_KEY_FILE: "C:/k/api", ...other }, win)).apiKey).toBe("file-secret-value");
     const missing = io({ readFile: () => { throw new Error("ENOENT secret-path-detail"); } });
     expect(() => loadConfig({ ETORO_API_KEY_FILE: "/nope", ...other }, missing)).toThrow(/cannot read \/nope/);
   });
@@ -143,7 +148,7 @@ describe("secret sources", () => {
       { ETORO_API_KEY_CMD: 'security find-generic-password -s "etoro mcp" -a api-key -w', ...other },
       fake,
     );
-    expect(cfg.auth.apiKey).toBe("cmd-secret-value");
+    expect(keysOf(cfg).apiKey).toBe("cmd-secret-value");
     expect(fake.runs[0]).toEqual(["security", ["find-generic-password", "-s", "etoro mcp", "-a", "api-key", "-w"]]);
   });
 
@@ -181,9 +186,9 @@ describe("secret sources", () => {
 
   it("can mix sources between the two keys, and plain variables still work", () => {
     const cfg = loadConfig({ ETORO_API_KEY_FILE: "/f", ETORO_USER_KEY_CMD: "op read op://v/e/user" }, io());
-    expect(cfg.auth.apiKey).toBe("file-secret-value");
-    expect(cfg.auth.userKey).toBe("cmd-secret-value");
-    expect(loadConfig({ ETORO_API_KEY: "plain-api-1", ETORO_USER_KEY: "plain-user-2" }).auth.apiKey).toBe("plain-api-1");
+    expect(keysOf(cfg).apiKey).toBe("file-secret-value");
+    expect(keysOf(cfg).userKey).toBe("cmd-secret-value");
+    expect(keysOf(loadConfig({ ETORO_API_KEY: "plain-api-1", ETORO_USER_KEY: "plain-user-2" })).apiKey).toBe("plain-api-1");
   });
 });
 
@@ -194,5 +199,39 @@ describe("splitCommand", () => {
     expect(splitCommand("x ''")).toEqual(["x", ""]);
     expect(splitCommand("")).toEqual([]);
     expect(() => splitCommand('a "b')).toThrow(ConfigError);
+  });
+});
+
+describe("loadConfig: OAuth sign-in", () => {
+  const oauth = { ETORO_AUTH: "oauth", ETORO_OAUTH_CLIENT_ID: "client-id-1", ETORO_OAUTH_CLIENT_SECRET: "client-secret-value-1" };
+
+  it("needs no API keys, and asks for the client id and secret", () => {
+    const cfg = loadConfig(oauth);
+    expect(cfg.auth).toMatchObject({ mode: "oauth", clientId: "client-id-1", clientSecret: "client-secret-value-1", callbackPort: 53682 });
+    expect(() => loadConfig({ ETORO_AUTH: "oauth" })).toThrow(/ETORO_OAUTH_CLIENT_ID/);
+    expect(() => loadConfig({ ETORO_AUTH: "oauth", ETORO_OAUTH_CLIENT_ID: "x" })).toThrow(/CLIENT_SECRET/);
+    expect(() => loadConfig({ ETORO_AUTH: "magic" })).toThrow(/keys.*oauth/);
+  });
+
+  it("asks only for the scopes that what is switched on needs", () => {
+    const scopes = (extra: Record<string, string>) => (loadConfig({ ...oauth, ...extra }).auth as { scopes: string[] }).scopes;
+    expect(scopes({})).toEqual(["etoro-public:market-data:read", "etoro-public:user-info:read", "etoro-public:trade.demo:read"]);
+    expect(scopes({ ETORO_ENABLE_WRITE: "true" })).toContain("etoro-public:trade.demo:write");
+    expect(scopes({ ETORO_ENV: "real" })).toEqual(["etoro-public:market-data:read", "etoro-public:user-info:read", "etoro-public:trade.real:read"]);
+    expect(scopes({ ETORO_ENABLE_WRITE: "true" })).not.toContain("etoro-public:trade.real:write");
+  });
+
+  it("accepts explicit scopes with or without the prefix and rejects odd characters", () => {
+    const cfg = loadConfig({ ...oauth, ETORO_OAUTH_SCOPES: "market-data:read, etoro-public:price-alerts:read market-data:read" });
+    expect((cfg.auth as { scopes: string[] }).scopes).toEqual(["etoro-public:market-data:read", "etoro-public:price-alerts:read"]);
+    expect(() => loadConfig({ ...oauth, ETORO_OAUTH_SCOPES: "a b;rm" })).toThrow(/scope/);
+  });
+
+  it("takes the secret from a file or a command like the API keys do, and checks the port", () => {
+    const io: SecretIo = { platform: "linux", readFile: () => "secret-from-file\n", fileMode: () => 0o600, run: () => ({ status: 0, stdout: "", stderr: "" }) };
+    const cfg = loadConfig({ ETORO_AUTH: "oauth", ETORO_OAUTH_CLIENT_ID: "c", ETORO_OAUTH_CLIENT_SECRET_FILE: "/k/s" }, io);
+    expect((cfg.auth as { clientSecret: string }).clientSecret).toBe("secret-from-file");
+    expect(() => loadConfig({ ...oauth, ETORO_OAUTH_PORT: "80" })).toThrow(/ETORO_OAUTH_PORT/);
+    expect((loadConfig({ ...oauth, ETORO_OAUTH_PORT: "54000" }).auth as { callbackPort: number }).callbackPort).toBe(54000);
   });
 });
