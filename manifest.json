@@ -27,6 +27,9 @@
       "env": {
         "ETORO_API_KEY": "${user_config.api_key}",
         "ETORO_USER_KEY": "${user_config.user_key}",
+        "ETORO_USE_OAUTH": "${user_config.use_oauth}",
+        "ETORO_OAUTH_CLIENT_ID": "${user_config.oauth_client_id}",
+        "ETORO_OAUTH_CLIENT_SECRET": "${user_config.oauth_client_secret}",
         "ETORO_USE_REAL": "${user_config.use_real}",
         "ETORO_ENABLE_WRITE": "${user_config.enable_write}",
         "ETORO_ALLOW_REAL_WRITE": "${user_config.allow_real_write}",
@@ -44,16 +47,36 @@
     "api_key": {
       "type": "string",
       "title": "eToro API key",
-      "description": "Your eToro API key (x-api-key).",
+      "description": "Your eToro API key (x-api-key). Leave empty when you sign in with OAuth instead.",
       "sensitive": true,
-      "required": true
+      "required": false
     },
     "user_key": {
       "type": "string",
       "title": "eToro user key",
-      "description": "Your eToro user key (x-user-key), from the same key pair.",
+      "description": "Your eToro user key (x-user-key), from the same key pair. Leave empty when you sign in with OAuth instead.",
       "sensitive": true,
-      "required": true
+      "required": false
+    },
+    "use_oauth": {
+      "type": "boolean",
+      "title": "Sign in with OAuth instead of API keys",
+      "description": "On: the server signs in through your own eToro OAuth application (client id and secret below) and gets a token with only the permissions you approve; the API keys above are not used. Then ask Claude to sign in to eToro. See the README, section Sign in with OAuth.",
+      "default": false,
+      "required": false
+    },
+    "oauth_client_id": {
+      "type": "string",
+      "title": "OAuth client id",
+      "description": "Client id of the OAuth application you registered at eToro (only with OAuth sign-in). The application's redirect address must be http://localhost:53682/callback.",
+      "required": false
+    },
+    "oauth_client_secret": {
+      "type": "string",
+      "title": "OAuth client secret",
+      "description": "Client secret of that application (only with OAuth sign-in).",
+      "sensitive": true,
+      "required": false
     },
     "use_real": {
       "type": "boolean",

@@ -227,6 +227,14 @@ describe("loadConfig: OAuth sign-in", () => {
     expect(() => loadConfig({ ...oauth, ETORO_OAUTH_SCOPES: "a b;rm" })).toThrow(/scope/);
   });
 
+  it("ETORO_USE_OAUTH is the same choice as a switch, and the two must agree", () => {
+    const base = { ETORO_OAUTH_CLIENT_ID: "client-id-1", ETORO_OAUTH_CLIENT_SECRET: "client-secret-value-1" };
+    expect(loadConfig({ ...base, ETORO_USE_OAUTH: "true" }).auth.mode).toBe("oauth");
+    expect(loadConfig({ ...keys, ETORO_USE_OAUTH: "false" }).auth.mode).toBe("keys");
+    expect(loadConfig({ ...keys, ETORO_USE_OAUTH: "" }).auth.mode).toBe("keys");
+    expect(() => loadConfig({ ...base, ETORO_AUTH: "oauth", ETORO_USE_OAUTH: "false" })).toThrow(/set only one/);
+  });
+
   it("takes the secret from a file or a command like the API keys do, and checks the port", () => {
     const io: SecretIo = { platform: "linux", readFile: () => "secret-from-file\n", fileMode: () => 0o600, run: () => ({ status: 0, stdout: "", stderr: "" }) };
     const cfg = loadConfig({ ETORO_AUTH: "oauth", ETORO_OAUTH_CLIENT_ID: "c", ETORO_OAUTH_CLIENT_SECRET_FILE: "/k/s" }, io);

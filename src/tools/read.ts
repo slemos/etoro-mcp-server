@@ -19,7 +19,7 @@ const DOCS = "https://api-portal.etoro.com";
  * queries are POST requests at eToro but only compute and return data).
  * Responses are returned as eToro sends them.
  */
-export function registerReadTools({ mcp, cfg, client, store }: ToolContext): void {
+export function registerReadTools({ mcp, cfg, client, store, signIn }: ToolContext): void {
   const env = cfg.env;
 
   mcp.registerTool(
@@ -54,7 +54,7 @@ export function registerReadTools({ mcp, cfg, client, store }: ToolContext): voi
       let identity: Identity | undefined;
       if (me.ok) {
         identity = me.value;
-        checks.push({ name: "authentication", ok: true, ms: me.ms, detail: "eToro accepted the keys and identified the account." });
+        checks.push({ name: "authentication", ok: true, ms: me.ms, detail: `eToro accepted the ${cfg.auth.mode === "oauth" ? "sign-in" : "keys"} and identified the account.` });
       } else {
         checks.push({ name: "authentication", ok: false, ms: me.ms, detail: oneLine(me.error) });
       }
@@ -123,12 +123,26 @@ export function registerReadTools({ mcp, cfg, client, store }: ToolContext): voi
       if (scoped && scoped[env].write && !writeEnabled(cfg)) {
         advice.push(`This server is read-only but the key has Write permission for ${env}. A Read-only key limits the damage if the key ever leaks.`);
       }
-      if (identity) advice.push("Restrict the key by IP address and set an expiry in eToro (Settings > Trading > API Key Management); neither can be checked through the API.");
+      if (identity && cfg.auth.mode === "keys") advice.push("Restrict the key by IP address and set an expiry in eToro (Settings > Trading > API Key Management); neither can be checked through the API.");
       const environmentVerified =
         !!identity && warnings.every((w) => w.startsWith("eToro did not report")) && (dataBelongsTo === env || (dataBelongsTo === "unknown" && keyIsFor.includes(env)));
 
       return ok({
         connected: me.ok,
+        authentication: signIn
+          ? (() => {
+              const st = signIn.status();
+              return {
+                method: "oauth",
+                signedIn: st.signedIn,
+                accessExpiresAt: st.accessExpiresAt === null ? null : new Date(st.accessExpiresAt).toISOString(),
+                missingScopes: st.missingScopes,
+                signInPending: st.pending,
+                lastSignInProblem: st.lastFailure,
+                ...(st.signedIn ? {} : { next: "Call etoro_sign_in and ask the user to approve in the browser." }),
+              };
+            })()
+          : { method: "keys" },
         environment: env,
         environmentVerified,
         dataBelongsTo,

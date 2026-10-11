@@ -295,8 +295,15 @@ function parseScopes(raw: string | undefined, fallback: string[]): string[] {
 }
 
 function resolveAuth(env: NodeJS.ProcessEnv, io: SecretIo, etoroEnv: EtoroEnv, enableWrite: boolean): AuthSettings {
-  const mode = clean(env.ETORO_AUTH)?.toLowerCase() ?? "keys";
-  if (mode !== "keys" && mode !== "oauth") throw new ConfigError('ETORO_AUTH must be "keys" or "oauth".');
+  // ETORO_USE_OAUTH=true|false is the same choice as a switch (the MCPB settings form has toggles, not drop-down lists).
+  const named = clean(env.ETORO_AUTH)?.toLowerCase();
+  if (named !== undefined && named !== "keys" && named !== "oauth") throw new ConfigError('ETORO_AUTH must be "keys" or "oauth".');
+  const useOAuth = clean(env.ETORO_USE_OAUTH) === undefined ? undefined : parseBool("ETORO_USE_OAUTH", env.ETORO_USE_OAUTH, false);
+  const fromSwitch = useOAuth === undefined ? undefined : useOAuth ? "oauth" : "keys";
+  if (named !== undefined && fromSwitch !== undefined && named !== fromSwitch) {
+    throw new ConfigError(`ETORO_AUTH is "${named}" but ETORO_USE_OAUTH is ${useOAuth}: set only one of them, or make them agree.`);
+  }
+  const mode = named ?? fromSwitch ?? "keys";
 
   if (mode === "oauth") {
     const clientId = clean(env.ETORO_OAUTH_CLIENT_ID);

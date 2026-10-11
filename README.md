@@ -178,6 +178,34 @@ It is a standard **stdio** server: run `node dist/index.js` with the environment
 
 Reference: [Authentication](https://api-portal.etoro.com/core/getting-started/authentication).
 
+## Sign in with OAuth (instead of API keys)
+
+Instead of a long-lived key pair you can sign in the way you sign in to any app: you approve a list of permissions on eToro's own page and the server receives a token that can do **only that**. You can end it at any time (`auth logout`, or the application's access in eToro), and no API key sits in your configuration. It is an alternative, not a replacement: API keys keep working exactly as before.
+
+**What you need once:** an OAuth application registered under your own eToro account, because eToro gives every application a client secret and has no public-client option. Its **redirect address must be `http://localhost:53682/callback`** (write `localhost`; eToro's gateway blocks `127.0.0.1` addresses). Register it with a temporary API key that has the `sso-applications:write` permission (create it in Settings → Trading → API Key Management, delete it afterwards):
+
+```bash
+curl -sS https://public-api.etoro.com/api/v1/sso/applications \
+  -H "x-api-key: $TEMP_API_KEY" -H "x-user-key: $TEMP_USER_KEY" -H "x-request-id: $(uuidgen)" \
+  -H "content-type: application/json" \
+  -d '{"applicationName": "My eToro MCP", "applicationIconUrl": "https://example.com/icon.png",
+       "redirectUris": ["http://localhost:53682/callback"],
+       "allowedGcids": [YOUR_GCID],
+       "scopes": [{"scopeId": 230, "isMandatory": true}, {"scopeId": 229, "isMandatory": true}, {"scopeId": 213, "isMandatory": true}]}'
+```
+
+`allowedGcids` limits the application to your own account. The answer holds the `clientId` and, **once**, the `clientSecret`; keep it like a password (see [Securing your setup](#securing-your-setup)). The scope ids come from `GET /api/v1/sso/scopes` (at the time of writing: `market-data:read` 230, `user-info:read` 229, `trade.demo:read` 213, `trade.real:read` 211; add the write scope of the environment you trade in only if you enable writes).
+
+**Then:**
+
+1. Configure the server with `ETORO_AUTH=oauth`, `ETORO_OAUTH_CLIENT_ID` and `ETORO_OAUTH_CLIENT_SECRET` (or `ETORO_OAUTH_CLIENT_SECRET_FILE` / `_CMD`). In the Claude Desktop bundle: turn on *Sign in with OAuth* and fill the two fields. The API keys are not used.
+2. Sign in: ask Claude to sign in to eToro (the `etoro_sign_in` tool opens eToro's page; you approve in the browser; it cannot approve for you; this is the way with the Desktop bundle), or run `node dist/index.js auth login` with the same variables from a checkout of this repository (after `npm run build`).
+3. `auth status [--check]` and `etoro_check_connection` show the permissions of your token. `auth logout` / `etoro_sign_out` revokes the token at eToro and deletes it from your computer.
+
+**Permissions the server asks for:** the narrowest that match the settings: `market-data:read`, `user-info:read` and `trade.<env>:read`, plus `trade.<env>:write` only when `ETORO_ENABLE_WRITE=true`, and never the other environment. `ETORO_OAUTH_SCOPES` overrides the list (the application must have been registered with those scopes). eToro enforces them: a token without `trade.real:read` is refused on the real account. Everything else stays as it is: Claude can still only *prepare* an action and you press Execute.
+
+**How long it lasts, and where it lives:** the access token and the sign-in itself last 30 days, and the token is renewed automatically; eToro replaces the refresh token on each renewal, so the tokens are kept in one SQLite file (macOS `~/Library/Application Support/etoro-mcp-server/oauth.sqlite`, same folder logic as the history; `ETORO_OAUTH_TOKEN_FILE` changes it; mode `0600`) that every server process shares and renews under a short lease. Whoever can read that file can use the token until it expires or is revoked, which is the same exposure as an API key kept in a file; the difference is that the permissions are limited and revocable. If the sign-in is lost (revoked, expired, or the file deleted) the tools say so and `auth login` fixes it.
+
 ## Securing your setup
 
 The server needs two secrets (the API key and the user key). **How you hand them over matters as much as what the server does with them.** Anyone who gets the pair can read your account, and with a Write key can trade on it.
@@ -256,8 +284,13 @@ All settings are environment variables (see [`.env.example`](.env.example)). The
 
 | Variable | Default | Description |
 |---|---|---|
-| `ETORO_API_KEY` | — (required) | Public API key (`x-api-key`). Alternatives: `ETORO_API_KEY_FILE` or `ETORO_API_KEY_CMD` (see [Securing your setup](#securing-your-setup)). Set exactly one. |
-| `ETORO_USER_KEY` | — (required) | User key (`x-user-key`). Alternatives: `ETORO_USER_KEY_FILE` or `ETORO_USER_KEY_CMD`. Set exactly one. |
+| `ETORO_API_KEY` | — (required with keys) | Public API key (`x-api-key`). Alternatives: `ETORO_API_KEY_FILE` or `ETORO_API_KEY_CMD` (see [Securing your setup](#securing-your-setup)). Set exactly one. |
+| `ETORO_USER_KEY` | — (required with keys) | User key (`x-user-key`). Alternatives: `ETORO_USER_KEY_FILE` or `ETORO_USER_KEY_CMD`. Set exactly one. |
+| `ETORO_AUTH` | `keys` | `keys` (API key pair) or `oauth` ([sign in with OAuth](#sign-in-with-oauth-instead-of-api-keys)). `ETORO_USE_OAUTH=true`/`false` is the same choice as a switch (the bundle's form uses it); if both are set they must agree. With `oauth`, the two keys above are not needed. |
+| `ETORO_OAUTH_CLIENT_ID`, `ETORO_OAUTH_CLIENT_SECRET` | — | Client id and secret of your eToro OAuth application (only with `ETORO_AUTH=oauth`). The secret also accepts `_FILE` and `_CMD`. |
+| `ETORO_OAUTH_SCOPES` | by settings | Space-separated scopes to ask for, for example `market-data:read trade.demo:read`. Default: read access to the environment, plus write only when `ETORO_ENABLE_WRITE=true`. |
+| `ETORO_OAUTH_PORT` | `53682` | Local port of the sign-in callback; the application's redirect address must be `http://localhost:<port>/callback`. |
+| `ETORO_OAUTH_TOKEN_FILE` | your data folder | SQLite file holding the tokens (`0600`). |
 | `ETORO_ENV` | `demo` | `demo` or `real`. Must match the environment of the key pair. |
 | `ETORO_USE_REAL` | unset | `true` or `false`: the same choice as `ETORO_ENV`, as a switch (the MCPB bundle's form uses it, since extension forms have toggles but no drop-down). If both are set they must agree; otherwise the server refuses to start. |
 | `ETORO_ENABLE_WRITE` | `false` | Register the write tools. Needs a key with **Write** permission. |

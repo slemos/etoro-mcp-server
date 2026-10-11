@@ -33,6 +33,15 @@ All tools are prefixed `etoro_`. Read tools are annotated `readOnlyHint: true`; 
 | `etoro_get_action_history` | – (local: the SQLite history) | `query?`, `environment?`, `action?`, `status?`, `from?`, `to?` (YYYY-MM-DD), `limit?` (1–100, default 20), `offset?` |
 | `etoro_open_history` | – (local: opens the history page in the browser) | – |
 
+## Sign-in tools (registered only with `ETORO_AUTH=oauth`)
+
+| Tool | What it does |
+|---|---|
+| `etoro_sign_in` | Opens eToro's permission page in the user's browser and returns at once; the user approves there (the tool cannot), and the redirect to `http://localhost:<port>/callback` completes it. Does nothing when already signed in, unless `force`. The scopes come from the configuration, not from the model. Run `etoro_check_connection` afterwards. |
+| `etoro_sign_out` | Revokes the refresh token at eToro (which ends the access token too) and deletes the stored tokens. |
+
+`etoro_check_connection` adds an `authentication` block (`method`, `signedIn`, `accessExpiresAt`, `missingScopes`, `signInPending`, `lastSignInProblem`). Requests carry `Authorization: Bearer ...` and never the API-key headers (eToro refuses both together).
+
 ## Write tools (registered only with `ETORO_ENABLE_WRITE=true`; real needs `ETORO_ALLOW_REAL_WRITE=true`)
 
 ### Prepare-only actions: Claude proposes, the user executes
