@@ -2,14 +2,13 @@
 
 **Talk to your eToro account from Claude.** Ask about your portfolio in plain language, check prices and costs, and — only if you choose to turn it on — place orders that you approve one by one.
 
-[![tests](https://img.shields.io/github/actions/workflow/status/slemos/etoro-mcp-server/ci.yml?branch=main&label=tests%20%C2%B7%20build%20%C2%B7%20security%20checks)](https://github.com/slemos/etoro-mcp-server/actions/workflows/ci.yml)
-[![security](https://img.shields.io/github/actions/workflow/status/slemos/etoro-mcp-server/security.yml?branch=main&label=SAST%20%C2%B7%20dependencies%20%C2%B7%20secrets)](https://github.com/slemos/etoro-mcp-server/actions/workflows/security.yml)
+[![tests](https://img.shields.io/github/actions/workflow/status/slemos/etoro-mcp-server/ci.yml?branch=main&label=tests%20%C2%B7%20build%20%C2%B7%20security%20checks&logo=githubactions&logoColor=white)](https://github.com/slemos/etoro-mcp-server/actions/workflows/ci.yml)
+[![security](https://img.shields.io/github/actions/workflow/status/slemos/etoro-mcp-server/security.yml?branch=main&label=SAST%20%C2%B7%20dependencies%20%C2%B7%20secrets&logo=github&logoColor=white)](https://github.com/slemos/etoro-mcp-server/actions/workflows/security.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/slemos/etoro-mcp-server/badge)](https://scorecard.dev/viewer/?uri=github.com/slemos/etoro-mcp-server)
-[![license: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![node](https://img.shields.io/badge/node-%E2%89%A520-339933)](package.json)
-[![MCP](https://img.shields.io/badge/MCP-server-8A2BE2)](https://modelcontextprotocol.io)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue?logo=opensourceinitiative&logoColor=white)](LICENSE)
+[![node](https://img.shields.io/badge/node-%E2%89%A522.13-339933?logo=nodedotjs&logoColor=white)](package.json)
+[![MCP](https://img.shields.io/badge/MCP-server-8A2BE2?logo=modelcontextprotocol&logoColor=white)](https://modelcontextprotocol.io)
 [![M8ven Score](https://m8ven.ai/badge/mcp/slemos-etoro-mcp-server-174qfe?v=bcb9ba5a3b71a031304e0fe35302fb65)](https://m8ven.ai/mcp/slemos-etoro-mcp-server-174qfe?s=readme)
-
 
 > **Disclaimer.** This project is not affiliated with, endorsed by or supported by eToro. "eToro" is a trademark of its owner. Nothing here is financial advice. Trading — especially with leverage or CFDs — can lose money, and software that lets an AI act on a brokerage account can lose it faster. Read the [safety model](#safety-model), start on the **demo** environment, and check eToro's API terms before automating anything.
 
