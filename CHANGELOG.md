@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.0 — unreleased
+
+### Added
+- `etoro-mcp-server auth register`: creates your own eToro OAuth application from a temporary API key pair (it needs the `sso-applications:write` permission), restricted to your own account, with the permissions your settings need. The client secret goes to a `0600` file and is never printed; the command prints the three settings to use. Replaces the hand-made `curl` in the README.
+- Tried live on a demo account with the built server: `auth register`, `auth login`, `auth status --check`, `etoro_check_connection` (environment verified), a portfolio read with only the token, and `auth logout` (token revoked). The test application was deleted afterwards. Renewal and the write scopes were not exercised live.
+- Checked live: eToro's token endpoint refuses a request without the client secret (`invalid_client`), and the registration ignores an application type, so every application is confidential. A shared "public" application for the project is not possible; each person registers their own.
+
 ## 0.9.0 — 2026-10-11
 
 Sign in with OAuth as an alternative to API keys.
@@ -8,7 +15,7 @@ Sign in with OAuth as an alternative to API keys.
 - **Sign in with OAuth** (`ETORO_AUTH=oauth`): you approve a list of permissions on eToro's page and the server gets a token limited to them, revocable at any time, with no API key in the configuration. Authorization code with PKCE; the callback is received on `localhost`. The token lasts 30 days and is renewed automatically. eToro replaces the refresh token on each renewal, so the tokens are kept in a shared SQLite file (`0600`) and renewals take a short lease: Claude Desktop and Claude Code can run at once without invalidating each other. Setup: [README, Sign in with OAuth](README.md#sign-in-with-oauth-instead-of-api-keys).
 - `etoro-mcp-server auth login | status [--check] | logout`, and the tools `etoro_sign_in` and `etoro_sign_out` (only registered with OAuth) so the sign-in can be done from Claude Desktop. `etoro_check_connection` reports the sign-in. The permissions asked for default to the narrowest that fit: read access to the chosen environment, write only when writes are enabled, never the other environment (`ETORO_OAUTH_SCOPES` overrides).
 - The MCPB bundle has a *Sign in with OAuth* switch and client id/secret fields; the API key fields are now optional.
-- Tests: 291. The sign-in protocol was checked live before building it (below), but the finished server has so far been run only against a simulated sign-in service, not against eToro.
+- Tests: 291. The finished server was then tried live (see 0.10.0).
 - Checked live before building it: scopes are enforced (a demo-only token is refused on the real account), Bearer and API-key headers together are refused, and revoking the refresh token ends the access token at once.
 
 ### Changed

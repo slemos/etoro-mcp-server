@@ -4,7 +4,9 @@ import { ETORO_OAUTH, OAuthHttp } from "./auth/oauth.js";
 import { TokenStore } from "./auth/store.js";
 import { defaultOpenUrl } from "./approval/opener.js";
 import { EtoroClient } from "./client.js";
-import { ConfigError, type OAuthSettings, loadConfig } from "./config.js";
+import { ConfigError, type OAuthSettings, defaultDataDir, loadConfig } from "./config.js";
+import { join } from "node:path";
+import { RegisterError, registerApplication } from "./auth/register.js";
 import { fetchIdentity } from "./environment.js";
 
 export interface CliIo {
@@ -19,6 +21,9 @@ export interface CliIo {
 
 export const USAGE = `Usage: etoro-mcp-server auth <command>
 
+  register Create your own eToro OAuth application (one time). Needs a temporary API key pair with the
+           sso-applications:write permission in ETORO_API_KEY / ETORO_USER_KEY (or their _FILE / _CMD forms).
+           The client secret is written to a private file, never printed. Options: --name "..." --secret-file PATH --force
   login    Sign in to eToro in your browser (OAuth). Needs ETORO_OAUTH_CLIENT_ID and ETORO_OAUTH_CLIENT_SECRET.
   status   Show whether you are signed in, until when, and with which permissions. Add --check to ask eToro.
   logout   Revoke the tokens at eToro and delete them from this computer.
@@ -34,10 +39,11 @@ function oauthSettings(env: NodeJS.ProcessEnv): OAuthSettings {
 /** `etoro-mcp-server auth ...`. Returns the process exit code. */
 export async function runCli(args: string[], io: CliIo): Promise<number> {
   const [command, ...flags] = args;
-  if (!command || !["login", "status", "logout"].includes(command)) {
+  if (!command || !["login", "status", "logout", "register"].includes(command)) {
     io.err(USAGE);
     return command ? 2 : 0;
   }
+  if (command === "register") return register(flags, io);
   let auth: OAuthSettings;
   try {
     auth = oauthSettings(io.env);
@@ -53,6 +59,46 @@ export async function runCli(args: string[], io: CliIo): Promise<number> {
     return await status(auth, store, io, flags.includes("--check"));
   } finally {
     store.close();
+  }
+}
+
+function flagValue(flags: string[], name: string): string | undefined {
+  const i = flags.indexOf(name);
+  return i >= 0 ? flags[i + 1] : undefined;
+}
+
+async function register(flags: string[], io: CliIo): Promise<number> {
+  try {
+    // The scopes and the port come from the same settings the server will use; the client id and secret do not exist yet.
+    const oauth = loadConfig({ ...io.env, ETORO_AUTH: "oauth", ETORO_USE_OAUTH: "", ETORO_OAUTH_CLIENT_ID: "pending", ETORO_OAUTH_CLIENT_SECRET: "pending-secret", ETORO_OAUTH_CLIENT_SECRET_FILE: "", ETORO_OAUTH_CLIENT_SECRET_CMD: "" }).auth as OAuthSettings;
+    const keys = loadConfig({ ...io.env, ETORO_AUTH: "keys", ETORO_USE_OAUTH: "" }).auth;
+    if (keys.mode !== "keys") throw new ConfigError("API keys are required to register an application.");
+    const done = await registerApplication({
+      apiKey: keys.apiKey,
+      userKey: keys.userKey,
+      name: flagValue(flags, "--name") ?? "eToro MCP server",
+      scopes: oauth.scopes,
+      callbackPort: oauth.callbackPort,
+      secretFile: flagValue(flags, "--secret-file") ?? join(defaultDataDir(), "oauth-client-secret"),
+      overwrite: flags.includes("--force"),
+      fetchFn: io.fetchFn,
+    });
+    io.out(`Application created under your eToro account (only your account can use it).
+  Permissions it can ask for: ${done.scopes.join(", ")}
+  Redirect address: ${done.redirectUri}
+
+The client secret was saved to ${done.secretFile} (readable only by you) and not printed. Configure the server with:
+
+  ETORO_AUTH=oauth
+  ETORO_OAUTH_CLIENT_ID=${done.clientId}
+  ETORO_OAUTH_CLIENT_SECRET_FILE=${done.secretFile}
+
+Then sign in (ask Claude to call etoro_sign_in, or run: etoro-mcp-server auth login).
+Now delete the temporary API key in eToro (Settings > Trading > API Key Management): the server does not need it.`);
+    return 0;
+  } catch (err) {
+    io.err(`Registration failed: ${err instanceof ConfigError || err instanceof RegisterError || err instanceof Error ? err.message : String(err)}`);
+    return 1;
   }
 }
 
