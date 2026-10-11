@@ -73,7 +73,7 @@ An AI that can touch a brokerage account deserves more scrutiny than most code, 
 
 Details and the threat model are in [SECURITY.md](SECURITY.md).
 
-**Where it stands (v0.9.0).** Early software, tried against a live eToro **demo** account from Claude Desktop: the connection check, portfolio, positions, PnL, balances, trade history, instrument lookup and text search, rates, candles, eligibility, cost estimates and watchlist listing, the prepare → you-execute flow for opening an order and changing a stop loss, and the action history page with the daily counter. Closing and cancelling from Claude Desktop, watchlist changes and transfers are covered by tests but not yet exercised live (the demo script has closed positions), and nothing has been run with real money. Start on demo. Signing in with OAuth was checked step by step against eToro's live service (authorization with PKCE, scope enforcement, renewal and revocation), but this server's own sign-in has so far been exercised only by its tests against a simulated service.
+**Where it stands (v0.9.0).** Early software, tried against a live eToro **demo** account from Claude Desktop: the connection check, portfolio, positions, PnL, balances, trade history, instrument lookup and text search, rates, candles, eligibility, cost estimates and watchlist listing, the prepare → you-execute flow for opening an order and changing a stop loss, and the action history page with the daily counter. Closing and cancelling from Claude Desktop, watchlist changes and transfers are covered by tests but not yet exercised live (the demo script has closed positions), and nothing has been run with real money. Start on demo. Signing in with OAuth was tried end to end against eToro's live service on a demo account: registering the application with `auth register`, `auth login` in the browser, `auth status --check`, the connection check and a portfolio read through the server with only a token (no API keys), and `auth logout` revoking it. Automatic renewal after 30 days and the write scopes were exercised only by tests.
 
 ## This server and eToro's official MCP server
 
@@ -182,23 +182,20 @@ Reference: [Authentication](https://api-portal.etoro.com/core/getting-started/au
 
 Instead of a long-lived key pair you can sign in the way you sign in to any app: you approve a list of permissions on eToro's own page and the server receives a token that can do **only that**. You can end it at any time (`auth logout`, or the application's access in eToro), and no API key sits in your configuration. It is an alternative, not a replacement: API keys keep working exactly as before.
 
-**What you need once:** an OAuth application registered under your own eToro account, because eToro gives every application a client secret and has no public-client option. Its **redirect address must be `http://localhost:53682/callback`** (write `localhost`; eToro's gateway blocks `127.0.0.1` addresses). Register it with a temporary API key that has the `sso-applications:write` permission (create it in Settings → Trading → API Key Management, delete it afterwards):
+**What you need once:** an OAuth application registered under your own eToro account, because eToro gives every application a client secret and has no public-client option (its token endpoint refuses a request without the secret). The server registers it for you. Create a **temporary** API key pair with the `sso-applications:write` permission (Settings → Trading → API Key Management), then:
 
 ```bash
-curl -sS https://public-api.etoro.com/api/v1/sso/applications \
-  -H "x-api-key: $TEMP_API_KEY" -H "x-user-key: $TEMP_USER_KEY" -H "x-request-id: $(uuidgen)" \
-  -H "content-type: application/json" \
-  -d '{"applicationName": "My eToro MCP", "applicationIconUrl": "https://example.com/icon.png",
-       "redirectUris": ["http://localhost:53682/callback"],
-       "allowedGcids": [YOUR_GCID],
-       "scopes": [{"scopeId": 230, "isMandatory": true}, {"scopeId": 229, "isMandatory": true}, {"scopeId": 213, "isMandatory": true}]}'
+export ETORO_API_KEY=...  ETORO_USER_KEY=...        # the temporary pair
+node dist/index.js auth register --name "My eToro MCP"
 ```
 
-`allowedGcids` limits the application to your own account. The answer holds the `clientId` and, **once**, the `clientSecret`; keep it like a password (see [Securing your setup](#securing-your-setup)). The scope ids come from `GET /api/v1/sso/scopes` (at the time of writing: `market-data:read` 230, `user-info:read` 229, `trade.demo:read` 213, `trade.real:read` 211; add the write scope of the environment you trade in only if you enable writes).
+It creates the application restricted to your own account (`allowedGcids`), asks for the permissions your settings need (see below), and writes the client secret, which eToro shows only once, to a file only you can read (`--secret-file` to choose where) without printing it. It then prints the three settings to use. **Delete the temporary key afterwards**: the server does not need it. The application's redirect address is `http://localhost:53682/callback` (`ETORO_OAUTH_PORT` changes the port; the address must say `localhost`, because eToro's gateway blocks `127.0.0.1` addresses).
+
+Doing it by hand is possible too: `POST /api/v1/sso/applications` with `applicationName`, `applicationIconUrl`, `redirectUris`, `allowedGcids` and `scopes` as `[{"scopeId": N, "isMandatory": true}]` (ids from `GET /api/v1/sso/scopes`).
 
 **Then:**
 
-1. Configure the server with `ETORO_AUTH=oauth`, `ETORO_OAUTH_CLIENT_ID` and `ETORO_OAUTH_CLIENT_SECRET` (or `ETORO_OAUTH_CLIENT_SECRET_FILE` / `_CMD`). In the Claude Desktop bundle: turn on *Sign in with OAuth* and fill the two fields. The API keys are not used.
+1. Configure the server with `ETORO_AUTH=oauth`, `ETORO_OAUTH_CLIENT_ID` and `ETORO_OAUTH_CLIENT_SECRET` (or `ETORO_OAUTH_CLIENT_SECRET_FILE` / `_CMD`; `auth register` prints these). In the Claude Desktop bundle: turn on *Sign in with OAuth* and fill the two fields. The API keys are not used.
 2. Sign in: ask Claude to sign in to eToro (the `etoro_sign_in` tool opens eToro's page; you approve in the browser; it cannot approve for you; this is the way with the Desktop bundle), or run `node dist/index.js auth login` with the same variables from a checkout of this repository (after `npm run build`).
 3. `auth status [--check]` and `etoro_check_connection` show the permissions of your token. `auth logout` / `etoro_sign_out` revokes the token at eToro and deletes it from your computer.
 
