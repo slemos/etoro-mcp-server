@@ -15,7 +15,7 @@
 
 ## What it does
 
-[MCP](https://modelcontextprotocol.io) is the standard way to give Claude tools. This server gives Claude a set of tools that talk to the [eToro Public API](https://api-portal.etoro.com) with **your own keys**, so instead of opening the app and clicking around you can just ask:
+[MCP](https://modelcontextprotocol.io) is the standard way to give Claude tools. This server gives Claude a set of tools that talk to the [eToro Public API](https://api-portal.etoro.com) with **your own credentials** (an API key pair, or an OAuth sign-in), so instead of opening the app and clicking around you can just ask:
 
 | You say | What happens |
 |---|---|
@@ -32,26 +32,29 @@
 | *"Tell me when AAPL reaches 350."* / *"Move that alert to 340."* / *"Delete the alert."* | Price alerts: Claude lists them and **prepares** creating, changing or deleting one; you execute on the page. An alert only notifies you: it places no order and moves no money. |
 | *"Add these instruments to my Tech watchlist."* | Creates and edits watchlists (no money involved). |
 
-24 read tools, 12 prepare-only write tools and one gated transfer tool; see [Tools](#tools).
+24 read tools, 12 prepare-only write tools and one gated transfer tool (plus two sign-in tools when you use OAuth); see [Tools](#tools).
 
-**Safe by default.** It starts **read-only and on eToro's demo environment**. The tools that can move money are not even registered until you switch them on, real money needs a second switch, and Claude can only *prepare* an action: **you execute it yourself on a local approval page**, never Claude. Size caps, a rate limit and an audit log apply on top. Your keys stay on your machine (OS keychain, password manager or a protected file) and are never shown to Claude. Details in the [safety model](#safety-model).
+**Safe by default.** It starts **read-only and on eToro's demo environment**. The tools that can move money are not even registered until you switch them on, real money needs a second switch, and Claude can only *prepare* an action: **you execute it yourself on a local approval page**, never Claude. Size caps, a rate limit and an audit log apply on top. Your keys or tokens stay on your machine (OS keychain, password manager or a protected file) and are never shown to Claude. Details in the [safety model](#safety-model).
 
 ## TL;DR: install in two minutes
 
-You need an eToro **API key pair**; a **Read** key on the **Demo** environment is enough to start ([how to get one](#getting-etoro-api-keys)).
+You need one of two ways to authenticate with eToro:
+
+- **API key pair** (quickest): a **Read** key on the **Demo** environment is enough to start ([how to get one](#getting-etoro-api-keys)).
+- **OAuth sign-in** (permissions you approve on eToro's page, revocable, no long-lived key in the configuration): needs a one-time `auth register` step. Follow the [OAuth section](#sign-in-with-oauth-instead-of-api-keys) instead of pasting keys below.
 
 **Claude Desktop**
 
 1. Download `etoro-mcp-server-<version>.mcpb` from the [latest release](https://github.com/slemos/etoro-mcp-server/releases/latest) (or build it: `npm ci && npm run mcpb:pack`).
 2. Double-click it, or drag it into **Settings → Extensions**. Claude Desktop shows a red warning that the extension gets access to your computer and that Anthropic has not verified the developer: that is expected for an independent project, and you can [check where the file came from](#verifying-a-release).
-3. Paste your API key and user key, leave **Use the REAL environment** and **Enable write tools** off. The keys go to your OS keychain.
-4. Start a chat and ask: *"Check my eToro connection."* Then try *"How is my portfolio doing?"*
+3. Paste your API key and user key (or, for OAuth, turn on **Sign in with OAuth** and fill the client id and secret), leave **Use the REAL environment** and **Enable write tools** off. Secrets go to your OS keychain.
+4. With OAuth, first ask: *"Sign in to eToro."* and approve in the browser. Then start a chat and ask: *"Check my eToro connection."* Then try *"How is my portfolio doing?"*
 
 **Claude Code**
 
 ```bash
 git clone https://github.com/slemos/etoro-mcp-server.git && cd etoro-mcp-server && npm ci && npm run build
-claude mcp add etoro -- node "$(pwd)/dist/index.js"   # reads ETORO_API_KEY / ETORO_USER_KEY from your environment
+claude mcp add etoro -- node "$(pwd)/dist/index.js"   # reads ETORO_API_KEY / ETORO_USER_KEY from your environment (or ETORO_AUTH=oauth, see below)
 ```
 
 Other MCP clients and safer ways to hand over the keys (keychain, password manager, protected file) are in [Install](#install) and [Securing your setup](#securing-your-setup).
