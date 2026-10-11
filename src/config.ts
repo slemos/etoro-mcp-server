@@ -10,9 +10,15 @@ import { join } from "node:path";
 
 export type EtoroEnv = "demo" | "real";
 
-export interface Config {
+/** How the server authenticates to eToro. */
+export interface AuthSettings {
+  mode: "keys";
   apiKey: string;
   userKey: string;
+}
+
+export interface Config {
+  auth: AuthSettings;
   /** Which eToro environment the key pair belongs to. Defaults to "demo". */
   env: EtoroEnv;
   baseUrl: string;
@@ -268,8 +274,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, io: SecretIo = 
 
   const etoroEnv: EtoroEnv = envName;
   return {
-    apiKey,
-    userKey,
+    auth: { mode: "keys", apiKey, userKey },
     env: etoroEnv,
     baseUrl: parseBaseUrl(env.ETORO_BASE_URL),
     enableWrite: parseBool("ETORO_ENABLE_WRITE", env.ETORO_ENABLE_WRITE, false),

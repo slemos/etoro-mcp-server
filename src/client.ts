@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { type AuthProvider, createAuthProvider } from "./auth/provider.js";
 import { type Config, transfersEnabled, writeEnabled } from "./config.js";
 import type { RouteSpec } from "./endpoints.js";
 import { EtoroApiError, PolicyError } from "./errors.js";
@@ -26,10 +27,11 @@ export class EtoroClient {
     private readonly fetchFn: FetchFn = globalThis.fetch.bind(globalThis),
     private readonly sleep: Sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     private readonly log: (line: string) => void = (line) => process.stderr.write(`${line}\n`),
+    private readonly auth: AuthProvider = createAuthProvider(cfg.auth),
   ) {}
 
   private get secrets(): string[] {
-    return [this.cfg.apiKey, this.cfg.userKey];
+    return this.auth.secrets();
   }
 
   /** Enforces the allowlist and write policy before any network call. */
@@ -73,17 +75,14 @@ export class EtoroClient {
     }
 
     const requestId = opts.requestId ?? randomUUID();
-    const headers: Record<string, string> = {
-      accept: "application/json",
-      "x-request-id": requestId,
-      "x-api-key": this.cfg.apiKey,
-      "x-user-key": this.cfg.userKey,
-    };
-    if (opts.body !== undefined) headers["content-type"] = "application/json";
+    const staticHeaders: Record<string, string> = { accept: "application/json", "x-request-id": requestId };
+    if (opts.body !== undefined) staticHeaders["content-type"] = "application/json";
 
+    let renewed = false;
     for (let attempt = 1; ; attempt++) {
       const startedAt = Date.now();
       let response: Response;
+      const headers = { ...staticHeaders, ...(await this.auth.headers()) };
       try {
         response = await this.fetchFn(url, {
           method: route.method,
@@ -113,6 +112,12 @@ export class EtoroClient {
           MAX_RETRY_WAIT_MS,
         );
         await this.sleep(waitMs);
+        continue;
+      }
+
+      // Credentials that can be renewed (OAuth) get one fresh attempt. The same x-request-id is reused, so a write stays idempotent.
+      if (response.status === 401 && !renewed && (await this.auth.renew())) {
+        renewed = true;
         continue;
       }
 
