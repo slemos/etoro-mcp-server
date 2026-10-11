@@ -1,8 +1,9 @@
 # Changelog
 
-## 0.10.0 — unreleased
+## 0.10.0 — 2026-10-11
 
 ### Added
+- Tests: 296.
 - `etoro-mcp-server auth register`: creates your own eToro OAuth application from a temporary API key pair (it needs the `sso-applications:write` permission), restricted to your own account, with the permissions your settings need. The client secret goes to a `0600` file and is never printed; the command prints the three settings to use. Replaces the hand-made `curl` in the README.
 - Tried live on a demo account with the built server: `auth register`, `auth login`, `auth status --check`, `etoro_check_connection` (environment verified), a portfolio read with only the token, and `auth logout` (token revoked). The test application was deleted afterwards. Renewal and the write scopes were not exercised live.
 - Checked live: eToro's token endpoint refuses a request without the client secret (`invalid_client`), and the registration ignores an application type, so every application is confidential. A shared "public" application for the project is not possible; each person registers their own.
