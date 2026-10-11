@@ -8,6 +8,8 @@
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-339933)](package.json)
 [![MCP](https://img.shields.io/badge/MCP-server-8A2BE2)](https://modelcontextprotocol.io)
+[![M8ven Score](https://m8ven.ai/badge/mcp/slemos-etoro-mcp-server-174qfe?v=bcb9ba5a3b71a031304e0fe35302fb65)](https://m8ven.ai/mcp/slemos-etoro-mcp-server-174qfe?s=readme)
+
 
 > **Disclaimer.** This project is not affiliated with, endorsed by or supported by eToro. "eToro" is a trademark of its owner. Nothing here is financial advice. Trading — especially with leverage or CFDs — can lose money, and software that lets an AI act on a brokerage account can lose it faster. Read the [safety model](#safety-model), start on the **demo** environment, and check eToro's API terms before automating anything.
 
