@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.0 — unreleased
+## 0.9.0 — 2026-10-11
 
 Sign in with OAuth as an alternative to API keys.
 
@@ -8,6 +8,7 @@ Sign in with OAuth as an alternative to API keys.
 - **Sign in with OAuth** (`ETORO_AUTH=oauth`): you approve a list of permissions on eToro's page and the server gets a token limited to them, revocable at any time, with no API key in the configuration. Authorization code with PKCE; the callback is received on `localhost`. The token lasts 30 days and is renewed automatically. eToro replaces the refresh token on each renewal, so the tokens are kept in a shared SQLite file (`0600`) and renewals take a short lease: Claude Desktop and Claude Code can run at once without invalidating each other. Setup: [README, Sign in with OAuth](README.md#sign-in-with-oauth-instead-of-api-keys).
 - `etoro-mcp-server auth login | status [--check] | logout`, and the tools `etoro_sign_in` and `etoro_sign_out` (only registered with OAuth) so the sign-in can be done from Claude Desktop. `etoro_check_connection` reports the sign-in. The permissions asked for default to the narrowest that fit: read access to the chosen environment, write only when writes are enabled, never the other environment (`ETORO_OAUTH_SCOPES` overrides).
 - The MCPB bundle has a *Sign in with OAuth* switch and client id/secret fields; the API key fields are now optional.
+- Tests: 291. The sign-in protocol was checked live before building it (below), but the finished server has so far been run only against a simulated sign-in service, not against eToro.
 - Checked live before building it: scopes are enforced (a demo-only token is refused on the real account), Bearer and API-key headers together are refused, and revoking the refresh token ends the access token at once.
 
 ### Changed
