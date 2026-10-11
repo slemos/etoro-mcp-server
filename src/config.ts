@@ -11,10 +11,24 @@ import { join } from "node:path";
 export type EtoroEnv = "demo" | "real";
 
 /** How the server authenticates to eToro. */
-export interface AuthSettings {
+export type AuthSettings = KeysSettings | OAuthSettings;
+
+export interface KeysSettings {
   mode: "keys";
   apiKey: string;
   userKey: string;
+}
+
+/** Sign in with an OAuth application the user registered at eToro. The scopes decide what the token can do. */
+export interface OAuthSettings {
+  mode: "oauth";
+  clientId: string;
+  clientSecret: string;
+  scopes: string[];
+  /** Local port of the sign-in callback: the application's redirect URI must be http://localhost:<port>/callback. */
+  callbackPort: number;
+  /** SQLite file holding the tokens. */
+  tokenPath: string;
 }
 
 export interface Config {
@@ -260,24 +274,71 @@ function resolveEnvironment(env: NodeJS.ProcessEnv): EtoroEnv {
   return fromSwitch;
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env, io: SecretIo = defaultSecretIo): Config {
+const SCOPE_PREFIX = "etoro-public:";
+
+/** The narrowest scopes that do what is switched on: reading the account of the chosen environment, and writing there only when writes are enabled. */
+export function defaultOAuthScopes(etoroEnv: EtoroEnv, enableWrite: boolean): string[] {
+  const scopes = ["market-data:read", "user-info:read", `trade.${etoroEnv}:read`];
+  if (enableWrite) scopes.push(`trade.${etoroEnv}:write`);
+  return scopes.map((s) => SCOPE_PREFIX + s);
+}
+
+/** ETORO_OAUTH_SCOPES: space or comma separated; "market-data:read" and "etoro-public:market-data:read" mean the same. */
+function parseScopes(raw: string | undefined, fallback: string[]): string[] {
+  const value = clean(raw);
+  if (value === undefined) return fallback;
+  const scopes = value.split(/[\s,]+/).filter(Boolean).map((s) => (s.startsWith(SCOPE_PREFIX) ? s : SCOPE_PREFIX + s));
+  if (scopes.length === 0 || scopes.some((s) => !/^[A-Za-z0-9:._-]{1,100}$/.test(s))) {
+    throw new ConfigError("ETORO_OAUTH_SCOPES must be a list of scope names such as market-data:read trade.demo:read.");
+  }
+  return [...new Set(scopes)];
+}
+
+function resolveAuth(env: NodeJS.ProcessEnv, io: SecretIo, etoroEnv: EtoroEnv, enableWrite: boolean): AuthSettings {
+  const mode = clean(env.ETORO_AUTH)?.toLowerCase() ?? "keys";
+  if (mode !== "keys" && mode !== "oauth") throw new ConfigError('ETORO_AUTH must be "keys" or "oauth".');
+
+  if (mode === "oauth") {
+    const clientId = clean(env.ETORO_OAUTH_CLIENT_ID);
+    const clientSecret = resolveSecret("ETORO_OAUTH_CLIENT_SECRET", env, io);
+    if (!clientId || !clientSecret) {
+      throw new ConfigError(
+        "ETORO_AUTH=oauth needs ETORO_OAUTH_CLIENT_ID and ETORO_OAUTH_CLIENT_SECRET (or ETORO_OAUTH_CLIENT_SECRET_FILE / _CMD): " +
+          "the client id and secret of the OAuth application you registered at eToro. See the README, section Sign in with OAuth.",
+      );
+    }
+    if (!/^[A-Za-z0-9._~-]{1,200}$/.test(clientId)) throw new ConfigError("ETORO_OAUTH_CLIENT_ID has unexpected characters.");
+    const tokenFile = clean(env.ETORO_OAUTH_TOKEN_FILE);
+    return {
+      mode: "oauth",
+      clientId,
+      clientSecret,
+      scopes: parseScopes(env.ETORO_OAUTH_SCOPES, defaultOAuthScopes(etoroEnv, enableWrite)),
+      callbackPort: parseNumber("ETORO_OAUTH_PORT", env.ETORO_OAUTH_PORT, 53682, 1024, 65535),
+      tokenPath: tokenFile ? (expandHome(tokenFile) as string) : join(defaultDataDir(), "oauth.sqlite"),
+    };
+  }
+
   const apiKey = resolveSecret("ETORO_API_KEY", env, io);
   const userKey = resolveSecret("ETORO_USER_KEY", env, io);
   if (!apiKey || !userKey) {
     throw new ConfigError(
       "ETORO_API_KEY and ETORO_USER_KEY are required (or ETORO_API_KEY_FILE / ETORO_API_KEY_CMD and the USER_KEY equivalents). " +
-        "Create a key pair in eToro: Settings > Trading > API Key Management.",
+        "Create a key pair in eToro: Settings > Trading > API Key Management. Or sign in with OAuth instead: ETORO_AUTH=oauth.",
     );
   }
+  return { mode: "keys", apiKey, userKey };
+}
 
+export function loadConfig(env: NodeJS.ProcessEnv = process.env, io: SecretIo = defaultSecretIo): Config {
   const envName = resolveEnvironment(env);
-
   const etoroEnv: EtoroEnv = envName;
+  const enableWrite = parseBool("ETORO_ENABLE_WRITE", env.ETORO_ENABLE_WRITE, false);
   return {
-    auth: { mode: "keys", apiKey, userKey },
+    auth: resolveAuth(env, io, etoroEnv, enableWrite),
     env: etoroEnv,
     baseUrl: parseBaseUrl(env.ETORO_BASE_URL),
-    enableWrite: parseBool("ETORO_ENABLE_WRITE", env.ETORO_ENABLE_WRITE, false),
+    enableWrite,
     allowRealWrite: parseBool("ETORO_ALLOW_REAL_WRITE", env.ETORO_ALLOW_REAL_WRITE, false),
     allowTransfers: parseBool("ETORO_ALLOW_TRANSFERS", env.ETORO_ALLOW_TRANSFERS, false),
     openBrowser: parseBool("ETORO_OPEN_BROWSER", env.ETORO_OPEN_BROWSER, true),

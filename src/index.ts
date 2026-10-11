@@ -1,8 +1,13 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { defaultCliIo, runCli } from "./cli.js";
 import { ConfigError, loadConfig } from "./config.js";
 import { createServer, describeMode } from "./server.js";
 
 async function main(): Promise<void> {
+  // `etoro-mcp-server auth login|status|logout` is a command for the user, not the MCP server.
+  if (process.argv[2] === "auth") {
+    process.exit(await runCli(process.argv.slice(3), defaultCliIo()));
+  }
   let cfg;
   try {
     cfg = loadConfig();

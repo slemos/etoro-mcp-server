@@ -1,4 +1,7 @@
 import type { AuthSettings } from "../config.js";
+import { ETORO_OAUTH, OAuthHttp } from "./oauth.js";
+import { OAuthAuth } from "./oauthProvider.js";
+import { TokenStore } from "./store.js";
 
 /**
  * How requests to eToro are authenticated. The client asks the provider for headers on every request, so a provider
@@ -35,11 +38,20 @@ export class KeysAuth implements AuthProvider {
   }
 }
 
-export function createAuthProvider(auth: AuthSettings): AuthProvider {
-  return new KeysAuth(auth.apiKey, auth.userKey);
+export interface AuthDeps {
+  fetchFn?: typeof fetch;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  log?: (line: string) => void;
+}
+
+export function createAuthProvider(auth: AuthSettings, deps: AuthDeps = {}): AuthProvider {
+  if (auth.mode === "keys") return new KeysAuth(auth.apiKey, auth.userKey);
+  const http = new OAuthHttp({ clientId: auth.clientId, clientSecret: auth.clientSecret }, ETORO_OAUTH, deps.fetchFn, deps.now);
+  return new OAuthAuth(auth.clientId, new TokenStore(auth.tokenPath, deps.now), http, deps.now, deps.sleep, deps.log);
 }
 
 /** The secrets that come from configuration, for components that have no provider (the audit log). */
 export function configuredSecrets(auth: AuthSettings): string[] {
-  return [auth.apiKey, auth.userKey];
+  return auth.mode === "keys" ? [auth.apiKey, auth.userKey] : [auth.clientSecret];
 }
