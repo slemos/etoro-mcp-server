@@ -5,7 +5,7 @@ import type { AuthSettings } from "../config.js";
  * whose credentials change over time (OAuth tokens) can renew them without the client knowing how.
  */
 export interface AuthProvider {
-  readonly mode: AuthSettings["mode"];
+  readonly mode: "keys" | "oauth";
   /** Credential headers for one request. eToro refuses requests that carry both kinds, so a provider returns only its own. */
   headers(): Promise<Record<string, string>>;
   /**
