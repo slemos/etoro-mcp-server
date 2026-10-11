@@ -120,7 +120,7 @@ describe("secret sources", () => {
 
   it("reads a key from a file with owner-only permissions and trims it", () => {
     const cfg = loadConfig({ ETORO_API_KEY_FILE: "/secure/api", ...other }, io());
-    expect(cfg.apiKey).toBe("file-secret-value");
+    expect(cfg.auth.apiKey).toBe("file-secret-value");
   });
 
   it("refuses a key file that other users can read", () => {
@@ -132,7 +132,7 @@ describe("secret sources", () => {
 
   it("skips the permission check on Windows and reports unreadable files without details", () => {
     const win = io({ platform: "win32", fileMode: () => 0o100666 });
-    expect(loadConfig({ ETORO_API_KEY_FILE: "C:/k/api", ...other }, win).apiKey).toBe("file-secret-value");
+    expect(loadConfig({ ETORO_API_KEY_FILE: "C:/k/api", ...other }, win).auth.apiKey).toBe("file-secret-value");
     const missing = io({ readFile: () => { throw new Error("ENOENT secret-path-detail"); } });
     expect(() => loadConfig({ ETORO_API_KEY_FILE: "/nope", ...other }, missing)).toThrow(/cannot read \/nope/);
   });
@@ -143,7 +143,7 @@ describe("secret sources", () => {
       { ETORO_API_KEY_CMD: 'security find-generic-password -s "etoro mcp" -a api-key -w', ...other },
       fake,
     );
-    expect(cfg.apiKey).toBe("cmd-secret-value");
+    expect(cfg.auth.apiKey).toBe("cmd-secret-value");
     expect(fake.runs[0]).toEqual(["security", ["find-generic-password", "-s", "etoro mcp", "-a", "api-key", "-w"]]);
   });
 
@@ -181,9 +181,9 @@ describe("secret sources", () => {
 
   it("can mix sources between the two keys, and plain variables still work", () => {
     const cfg = loadConfig({ ETORO_API_KEY_FILE: "/f", ETORO_USER_KEY_CMD: "op read op://v/e/user" }, io());
-    expect(cfg.apiKey).toBe("file-secret-value");
-    expect(cfg.userKey).toBe("cmd-secret-value");
-    expect(loadConfig({ ETORO_API_KEY: "plain-api-1", ETORO_USER_KEY: "plain-user-2" }).apiKey).toBe("plain-api-1");
+    expect(cfg.auth.apiKey).toBe("file-secret-value");
+    expect(cfg.auth.userKey).toBe("cmd-secret-value");
+    expect(loadConfig({ ETORO_API_KEY: "plain-api-1", ETORO_USER_KEY: "plain-user-2" }).auth.apiKey).toBe("plain-api-1");
   });
 });
 

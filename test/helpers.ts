@@ -8,8 +8,7 @@ export const USER_KEY = "TEST_USER_KEY_ghijkl654321";
 
 export function baseCfg(over: Partial<Config> = {}): Config {
   return {
-    apiKey: API_KEY,
-    userKey: USER_KEY,
+    auth: { mode: "keys", apiKey: API_KEY, userKey: USER_KEY },
     env: "demo",
     baseUrl: "https://public-api.etoro.com",
     enableWrite: false,

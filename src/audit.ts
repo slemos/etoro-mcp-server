@@ -1,5 +1,6 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { configuredSecrets } from "./auth/provider.js";
 import type { Config } from "./config.js";
 import { redact } from "./redact.js";
 
@@ -18,7 +19,7 @@ export function createAudit(
   return (event) => {
     const line = redact(
       JSON.stringify({ ts: new Date().toISOString(), env: cfg.env, ...event }),
-      [cfg.apiKey, cfg.userKey],
+      configuredSecrets(cfg.auth),
     );
     sink(`[audit] ${line}`);
     if (!cfg.auditLogPath) return;
