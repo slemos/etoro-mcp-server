@@ -7,6 +7,7 @@ on:
   schedule:
     - cron: "23 4 * * 1" # weekly: new advisories appear without any change to the code
   workflow_call:
+  workflow_dispatch:
 
 permissions:
   contents: read

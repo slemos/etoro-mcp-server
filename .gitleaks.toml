@@ -1,0 +1,10 @@
+# Extends gitleaks' default rules. The only exception is the invented key pair that the tests use to prove keys never
+# leak (test/helpers.ts: TEST_API_KEY_... / TEST_USER_KEY_...). It is not an eToro key and has never been one.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Invented key constants used by the tests"
+condition = "AND"
+paths = ['''^test/helpers\.ts$''']
+regexes = ['''TEST_(API|USER)_KEY_[a-z0-9]+''']
